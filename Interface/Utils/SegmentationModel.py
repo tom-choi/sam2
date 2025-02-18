@@ -14,17 +14,6 @@ from torch.optim import Adam
 from tqdm import tqdm
 import gradio as gr
 
-# Path to the chest-ct-segmentation dataset folder
-data_dir = "dataset\Lucchi++" 
-train_images_dir = os.path.join(data_dir, "Train_In")
-train_masks_dir = os.path.join(data_dir, "Train_Out")
-test_images_dir = os.path.join(data_dir, "Test_In")
-test_masks_dir = os.path.join(data_dir, "Test_Out")
-PATCH_SIZE = 128
-
-# 检查设备
-device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-
 class SegmentationModel(nn.Module):
     def __init__(self, num_classes):
         super(SegmentationModel, self).__init__()
