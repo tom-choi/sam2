@@ -8,12 +8,15 @@ from torchvision import transforms
 import matplotlib.pyplot as plt
 from torch.utils.data import Dataset
 import random
+
+from functions.imagePreprocessing import  ImagePreprocessor
 #使用 function：from functions.data import prepare_dataset
 
 
 
 # 加载数据集: 
 #  train_data, test_data = prepare_dataset("Kasthuri++")
+
 # def prepare_dataset(dataset_name):
 #     """
 #     准备指定的数据集,返回训练数据和测试数据。
@@ -39,34 +42,47 @@ import random
 #     train_masks_dir = os.path.join(data_dir, "Train_Out")
     
 #     if os.path.exists(train_images_dir) and os.path.exists(train_masks_dir):
-#         train_images = sorted(os.listdir(train_images_dir))
-#         train_masks = sorted(os.listdir(train_masks_dir))
+#         # 获取文件列表并确保排序一致
+#         train_images = sorted(os.listdir(train_images_dir), key=lambda x: int(''.join(filter(str.isdigit, x))))
+#         train_masks = sorted(os.listdir(train_masks_dir), key=lambda x: int(''.join(filter(str.isdigit, x))))
         
+#         # 检查文件数量是否一致
+#         if len(train_images) != len(train_masks):
+#             print(f"Error: Train_In 和 Train_Out 文件数量不一致。")
+#             return [], []
+        
+#         # 按顺序配对
 #         for image_file, mask_file in zip(train_images, train_masks):
 #             image_path = os.path.join(train_images_dir, image_file)
 #             mask_path = os.path.join(train_masks_dir, mask_file)
 #             train_data.append({
 #                 "image": image_path,
-#                 "annotation": mask_path
+#                 "annotation": mask_path,
+#                 "index": len(train_data)  # 添加索引信息
 #             })
 #     else:
 #         print(f"Error: 未找到 {dataset_name} 训练数据。")
     
-#     # 准备测试数据
+#     # 准备测试数据（类似修改）
 #     test_data = []
 #     test_images_dir = os.path.join(data_dir, "Test_In")
 #     test_masks_dir = os.path.join(data_dir, "Test_Out")
     
 #     if os.path.exists(test_images_dir) and os.path.exists(test_masks_dir):
-#         test_images = sorted(os.listdir(test_images_dir))
-#         test_masks = sorted(os.listdir(test_masks_dir))
+#         test_images = sorted(os.listdir(test_images_dir), key=lambda x: int(''.join(filter(str.isdigit, x))))
+#         test_masks = sorted(os.listdir(test_masks_dir), key=lambda x: int(''.join(filter(str.isdigit, x))))
+        
+#         if len(test_images) != len(test_masks):
+#             print(f"Error: Test_In 和 Test_Out 文件数量不一致。")
+#             return [], []
         
 #         for image_file, mask_file in zip(test_images, test_masks):
 #             image_path = os.path.join(test_images_dir, image_file)
 #             mask_path = os.path.join(test_masks_dir, mask_file)
 #             test_data.append({
 #                 "image": image_path,
-#                 "annotation": mask_path
+#                 "annotation": mask_path,
+#                 "index": len(test_data)
 #             })
 #     else:
 #         print(f"Error: 未找到 {dataset_name} 测试数据。")
@@ -74,11 +90,11 @@ import random
 #     # 打印训练数据和测试数据
 #     print(f"Train Data ({dataset_name}):", train_data)
 #     print(f"Test Data ({dataset_name}):", test_data)
-#     print("Number of training samples:", len(train_data))
-#     print("Number of test samples:", len(test_data))
+#     print(f"Train Data ({dataset_name}):", len(train_data))
+#     print(f"Test Data ({dataset_name}):", len(test_data))
 #     return train_data, test_data
 
-def prepare_dataset(dataset_name):
+def prepare_dataset(dataset_name: str) -> Tuple[List[Dict[str, str]], List[Dict[str, str]]]:
     """
     准备指定的数据集,返回训练数据和测试数据。
     
@@ -124,7 +140,7 @@ def prepare_dataset(dataset_name):
     else:
         print(f"Error: 未找到 {dataset_name} 训练数据。")
     
-    # 准备测试数据（类似修改）
+    # 准备测试数据
     test_data = []
     test_images_dir = os.path.join(data_dir, "Test_In")
     test_masks_dir = os.path.join(data_dir, "Test_Out")
@@ -151,8 +167,8 @@ def prepare_dataset(dataset_name):
     # 打印训练数据和测试数据
     print(f"Train Data ({dataset_name}):", train_data)
     print(f"Test Data ({dataset_name}):", test_data)
-    print(f"Train Data ({dataset_name}):", len(train_data))
-    print(f"Test Data ({dataset_name}):", len(test_data))
+    print(f"训练样本数量: {len(train_data)}")
+    print(f"测试样本数量: {len(test_data)}")
     return train_data, test_data
 
 # 定义数据集类: 
@@ -181,11 +197,21 @@ class SegmentationDataset(torch.utils.data.Dataset):
         self.all_sizes = []
         self.all_paths = []
         
+        # 预处理模块初始化
+        self.preprocessor = ImagePreprocessor()
+        
+        # 这里是每张图片和mask的内容设置，预处理内容都放在这里
         for item in data_list:
             image = cv2.imread(item["image"])
             image = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
             mask = cv2.imread(item["annotation"], cv2.IMREAD_GRAYSCALE)
             
+            # 前置处理
+            image, mask = self.preprocessor.preprocess(image, mask, patch_size)
+       
+            # 图像增强处理
+            
+            # patch分块处理
             patches, mask_patches, positions, original_size = self.process_image_to_patches(image, mask)
             
             for patch, mask_patch in zip(patches, mask_patches):
@@ -244,74 +270,10 @@ class SegmentationDataset(torch.utils.data.Dataset):
             })
         return data_list
     
-    @staticmethod
-    def check_and_pad_image(image, mask, patch_size):
-        """
-        检查图片尺寸是否能被patch_size整除，如果不能则用黑色填充
-        Args:
-            image: 原始图像 (H, W, C)
-            mask: 对应的mask (H, W)
-            patch_size: patch大小
-        Returns:
-            处理后的image和mask
-        """
-        h, w = image.shape[:2]
-        
-        # 计算需要填充的像素数
-        pad_h = (patch_size - h % patch_size) % patch_size
-        pad_w = (patch_size - w % patch_size) % patch_size
-        
-        if pad_h == 0 and pad_w == 0:
-            return image, mask
-        
-        # 对图像进行填充（黑色）
-        image = cv2.copyMakeBorder(image, 
-                                0, pad_h, 
-                                0, pad_w, 
-                                cv2.BORDER_CONSTANT, 
-                                value=[0, 0, 0])
-        
-        # 对mask进行填充（黑色）
-        mask = cv2.copyMakeBorder(mask, 
-                               0, pad_h, 
-                               0, pad_w, 
-                               cv2.BORDER_CONSTANT, 
-                               value=0)
-        
-        return image, mask
-    
-    @staticmethod
-    def handle_transparent_edges(image, mask):
-        """
-        处理PNG图像的透明边缘，将其转换为黑色背景
-        Args:
-            image: 原始图像 (H, W, C)
-            mask: 对应的mask (H, W)
-        Returns:
-            处理后的image和mask
-        """
-        # 如果图像没有alpha通道，直接返回
-        if image.shape[2] != 4:
-            return image, mask
-            
-        # 分离alpha通道
-        b, g, r, alpha = cv2.split(image)
-        
-        # 创建黑色背景
-        black_background = np.zeros_like(image[..., :3])
-        
-        # 将图像合成到黑色背景上
-        image = cv2.bitwise_and(image[..., :3], image[..., :3], mask=alpha)
-        
-        # 对mask进行相同处理
-        mask = cv2.bitwise_and(mask, mask, mask=alpha)
-        
-        return image, mask
     
     def process_image_to_patches(self, image, mask):
         
-        # 先处理透明边缘
-        image, mask = self.handle_transparent_edges(image, mask)
+
         """处理图像和掩码为patches"""
         h, w = image.shape[:2]
         patches = []
@@ -393,8 +355,11 @@ class SegmentationDataset(torch.utils.data.Dataset):
             # 确保mask是二值图像
             _, original_mask = cv2.threshold(original_mask, 127, 255, cv2.THRESH_BINARY)
             
-            # 选择要显示的patches
-            selected_indices = image_indices[:num_patches]
+            # 随机选择要显示的patches
+            if len(image_indices) <= num_patches:
+                selected_indices = image_indices  # 如果patches数量不足，选择所有
+            else:
+                selected_indices = random.sample(image_indices, num_patches)  # 随机选择num_patches个patch
             num_selected = len(selected_indices)
             
             # 创建图像网格
@@ -488,7 +453,6 @@ class SegmentationDataset(torch.utils.data.Dataset):
             import traceback
             traceback.print_exc()
     
-    
     def visualize_random_images(self, num_images=3, patches_per_image=5):
         """
         随机选择几张图片并显示它们的patches
@@ -507,18 +471,44 @@ class SegmentationDataset(torch.utils.data.Dataset):
         for image_path in selected_images:
             print(f"\n显示图片的patches: {os.path.basename(image_path)}")
             self.visualize_image_patches(image_path, patches_per_image)
-            
-    # def visualize_batch(self, start_idx=0, num_samples=5):
-    #     """
-    #     可视化一批数据
-    #     Args:
-    #         start_idx: 起始索引
-    #         num_samples: 要显示的样本数量
-    #     """
-    #     for i in range(start_idx, min(start_idx + num_samples, len(self))):
-    #         print(f"\nSample {i}:")
-    #         print(f"Image path: {self.all_paths[i]}")
-    #         self.visualize_item(i)
+        
+    def visualize_item(self, idx, patches_per_image=5):
+        """
+        可视化单个样本
+        Args:
+            idx: 样本的索引
+            patches_per_image: 每个图像要显示的patches数量，默认为5
+        """
+        # 使用cv2加载图像
+        image_path = self.all_paths[idx]
+        original_image = cv2.imread(image_path)
+        if original_image is None:
+            print(f"无法读取图片: {image_path}")
+            return
+        original_image = cv2.cvtColor(original_image, cv2.COLOR_BGR2RGB)
+        
+        # 显示图像
+        cv2.imshow(f"Original Image {os.path.basename(image_path)}", original_image)
+        cv2.waitKey(0)
+        cv2.destroyAllWindows()
+        
+        # 显示图片的patches
+        print(f"\n显示图片的patches: {os.path.basename(image_path)}")
+        self.visualize_image_patches(image_path, patches_per_image)
+
+
+
+    def visualize_batch(self, start_idx=0, num_samples=5):
+        """
+        可视化一批数据
+        Args:
+            start_idx: 起始索引
+            num_samples: 要显示的样本数量
+        """
+        for i in range(start_idx, min(start_idx + num_samples, len(self))):
+            print(f"\nSample {i}:")
+            print(f"Image path: {self.all_paths[i]}")
+            self.visualize_item(i)
 
     def print_dataset_info(self):
         """
