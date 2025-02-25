@@ -290,5 +290,29 @@ def main_prediction_process(
     plt.title('Binarized Mask with Points')
     plt.axis('off')
 
+    # 如果想看中间过程的结果，也可以添加如下代码：
+    plt.figure(figsize=(15, 5))
+
+    # 显示清理小物体后的结果
+    plt.subplot(131)
+    plt.imshow(seg_map_cleaned, cmap='gray')
+    plt.title('After Remove Small Objects')
+    plt.axis('off')
+
+    # 显示膨胀操作后的结果
+    plt.subplot(132)
+    plt.imshow(binary_dilation(seg_map_cleaned, selem), cmap='gray')
+    plt.title('After Dilation')
+    plt.axis('off')
+
+    # 显示最终的闭运算结果
+    plt.subplot(133)
+    plt.imshow(seg_map_closed, cmap='gray')
+    plt.title('After Closing Operation')
+    plt.axis('off')     
+
+    plt.tight_layout()
+    plt.show()
+
 
 
