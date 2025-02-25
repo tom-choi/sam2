@@ -1,3 +1,4 @@
+from concurrent.futures import ThreadPoolExecutor
 import os
 import torch
 import torch.utils.data
@@ -307,55 +308,82 @@ class SegmentationDataset(torch.utils.data.Dataset):
         mask = cv2.bitwise_and(mask, mask, mask=alpha)
         
         return image, mask
-    
+
     def process_image_to_patches(self, image, mask):
-        
-        # 先处理透明边缘
         image, mask = self.handle_transparent_edges(image, mask)
-        """处理图像和掩码为patches"""
         h, w = image.shape[:2]
-        patches = []
-        mask_patches = []
-        positions = []
         
-        for y in range(0, h-self.patch_size+1, self.stride):
-            for x in range(0, w-self.patch_size+1, self.stride):
-                patch = image[y:y+self.patch_size, x:x+self.patch_size]
-                mask_patch = mask[y:y+self.patch_size, x:x+self.patch_size]
-                
-                patches.append(patch)
-                mask_patches.append(mask_patch)
-                positions.append([y, x])  # 列表
+        h_idx = np.arange(0, h-self.patch_size+1, self.stride)
+        w_idx = np.arange(0, w-self.patch_size+1, self.stride)
         
-        # 处理边缘情况
         if h % self.stride != 0:
-            y = h - self.patch_size
-            for x in range(0, w-self.patch_size+1, self.stride):
-                patch = image[y:y+self.patch_size, x:x+self.patch_size]
-                mask_patch = mask[y:y+self.patch_size, x:x+self.patch_size]
-                patches.append(patch)
-                mask_patches.append(mask_patch)
-                positions.append([y, x])
-        
+            h_idx = np.append(h_idx, h-self.patch_size)
         if w % self.stride != 0:
-            x = w - self.patch_size
-            for y in range(0, h-self.patch_size+1, self.stride):
-                patch = image[y:y+self.patch_size, x:x+self.patch_size]
-                mask_patch = mask[y:y+self.patch_size, x:x+self.patch_size]
-                patches.append(patch)
-                mask_patches.append(mask_patch)
-                positions.append([y, x])
+            w_idx = np.append(w_idx, w-self.patch_size)
         
-        if h % self.stride != 0 and w % self.stride != 0:
-            y = h - self.patch_size
-            x = w - self.patch_size
-            patch = image[y:y+self.patch_size, x:x+self.patch_size]
-            mask_patch = mask[y:y+self.patch_size, x:x+self.patch_size]
-            patches.append(patch)
-            mask_patches.append(mask_patch)
-            positions.append([y, x])
+        y_coords, x_coords = np.meshgrid(h_idx, w_idx, indexing='ij')
+        positions = np.stack([y_coords.flatten(), x_coords.flatten()], axis=1)
         
-        return patches, mask_patches, positions, (h, w)
+        def extract_patch(pos):
+            y, x = pos
+            return (image[y:y+self.patch_size, x:x+self.patch_size],
+                    mask[y:y+self.patch_size, x:x+self.patch_size])
+        
+        # 並行處理提取patches
+        with ThreadPoolExecutor() as executor:
+            results = list(executor.map(extract_patch, positions))
+        
+        patches, mask_patches = zip(*results)
+        return np.array(patches), np.array(mask_patches), positions.tolist(), (h, w)
+    
+    # def process_image_to_patches(self, image, mask):
+        
+    #     # 先处理透明边缘
+    #     image, mask = self.handle_transparent_edges(image, mask)
+    #     """处理图像和掩码为patches"""
+    #     h, w = image.shape[:2]
+    #     patches = []
+    #     mask_patches = []
+    #     positions = []
+        
+    #     for y in range(0, h-self.patch_size+1, self.stride):
+    #         for x in range(0, w-self.patch_size+1, self.stride):
+    #             patch = image[y:y+self.patch_size, x:x+self.patch_size]
+    #             mask_patch = mask[y:y+self.patch_size, x:x+self.patch_size]
+                
+    #             patches.append(patch)
+    #             mask_patches.append(mask_patch)
+    #             positions.append([y, x])  # 列表
+        
+    #     # 处理边缘情况
+    #     if h % self.stride != 0:
+    #         y = h - self.patch_size
+    #         for x in range(0, w-self.patch_size+1, self.stride):
+    #             patch = image[y:y+self.patch_size, x:x+self.patch_size]
+    #             mask_patch = mask[y:y+self.patch_size, x:x+self.patch_size]
+    #             patches.append(patch)
+    #             mask_patches.append(mask_patch)
+    #             positions.append([y, x])
+        
+    #     if w % self.stride != 0:
+    #         x = w - self.patch_size
+    #         for y in range(0, h-self.patch_size+1, self.stride):
+    #             patch = image[y:y+self.patch_size, x:x+self.patch_size]
+    #             mask_patch = mask[y:y+self.patch_size, x:x+self.patch_size]
+    #             patches.append(patch)
+    #             mask_patches.append(mask_patch)
+    #             positions.append([y, x])
+        
+    #     if h % self.stride != 0 and w % self.stride != 0:
+    #         y = h - self.patch_size
+    #         x = w - self.patch_size
+    #         patch = image[y:y+self.patch_size, x:x+self.patch_size]
+    #         mask_patch = mask[y:y+self.patch_size, x:x+self.patch_size]
+    #         patches.append(patch)
+    #         mask_patches.append(mask_patch)
+    #         positions.append([y, x])
+        
+    #     return patches, mask_patches, positions, (h, w)
     
     def visualize_image_patches(self, image_path, num_patches=5):
         """可视化指定图片的patches分布"""
