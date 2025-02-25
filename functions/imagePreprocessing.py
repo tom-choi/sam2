@@ -24,6 +24,7 @@ class ImagePreprocessor:
 
     # 图像size填充处理 以及 填充像素的颜色修改 
 
+    @staticmethod
     def check_and_pad_image(image, mask, patch_size):
         """
         检查图片尺寸是否能被patch_size整除，如果不能则用黑色填充
@@ -62,6 +63,7 @@ class ImagePreprocessor:
         
         return image, mask
 
+    @staticmethod
     def handle_transparent_edges(image, mask):
         """
         处理PNG图像的透明边缘，将其转换为黑色背景
@@ -112,7 +114,7 @@ class ImagePreprocessor:
         
         return image, mask
 
-#################### 以下是详细的图像预处理的函数(没说明那就是对单张大图进行处理) ##########
+    ################### 以下是详细的图像预处理的函数(没说明那就是对单张大图进行处理) ##########
 
     # 图像归一化
     ''' 主要用途是把图片统一设置亮度、对比度、饱和度，
@@ -120,6 +122,8 @@ class ImagePreprocessor:
         归一化的操作统一是对整张图片做的而不是对patche做的。
     
     '''
+
+    @staticmethod
     def normalize(img): # 这个函数是对图像进行归一化，将像素值映射到[-1,1]之间，像素值越大，代表颜色越深，反之越浅
         img = img.astype(np.float32) / 255.0
         img = (img - 0.5) / 0.5
@@ -143,6 +147,7 @@ class ImagePreprocessor:
     然后根据边缘的缺少像素来执行填补像素的function。
     这里的旋转角度可以设定，也可以随机设定。
     '''
+    @staticmethod
     def rotate(img, angle, center=None, scale=1.0):
         h, w = img.shape[:2]
         if center is None:
@@ -157,28 +162,29 @@ class ImagePreprocessor:
         这里缩放同时也会强化图像的分辨率，增强模型的鲁棒性。
         图像比例需要自定，但一般由外部传入的ratio决定。
     '''
+    @staticmethod
     def resize(img, size):
         img = cv2.resize(img, size)
         return img
     
-    # 总流程
-    def preprocess(self, image, mask,patch_size):
-        """
-        完整的预处理流程
-        Args:
-            image: 原始图像
-            mask: 对应的mask
-        Returns:
-            处理后的image和mask
-        """
-        # 处理透明边缘
-        image, mask = self.handle_transparent_edges(image, mask)
-        
-        # 图像填充
-        image, mask = self.check_and_pad_image(image, mask,patch_size)
-        
-        # 图像归一化
-        image = self.normalize(image)
-        
-        return image, mask
+# 总流程
+def PreProcess(image, mask,patch_size):
+    """
+    完整的预处理流程
+    Args:
+        image: 原始图像
+        mask: 对应的mask
+    Returns:
+        处理后的image和mask
+    """
+    # 处理透明边缘
+    image, mask = ImagePreprocessor.handle_transparent_edges(image, mask)
+    
+    # 图像填充
+    image, mask = ImagePreprocessor.check_and_pad_image(image, mask,patch_size)
+    
+    # 图像归一化
+    image = ImagePreprocessor.normalize(image)
+    
+    return image, mask
 

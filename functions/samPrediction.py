@@ -314,5 +314,10 @@ def main_prediction_process(
     plt.tight_layout()
     plt.show()
 
+    # save as final_segmentation.jpg
+    cv2.imwrite('final_segmentation.jpg', seg_map_final.astype(np.uint8) * 255)
+
+    
+
 
 
