@@ -213,7 +213,14 @@ class SegmentationDataset(torch.utils.data.Dataset):
             'original_size': self.all_sizes[idx],
             'image_path': self.all_paths[idx]
         } 
-   
+    
+    def read_image(self, idx):  # read and resize image and mask
+        img = cv2.imread(self.all_paths[idx])[..., ::-1]  # Convert BGR to RGB
+        r = np.min([1334 / img.shape[1], 1334 / img.shape[0]])
+        img = cv2.resize(img, (int(img.shape[1] * r), int(img.shape[0] * r)))
+        
+        return img, self.all_paths[idx]
+
     @staticmethod
     def verify_data_list(data_list: List[Dict[str, str]]) -> bool:
         """验证数据列表格式是否正确"""

@@ -267,5 +267,28 @@ def main_prediction_process(
         mask_bool = mask_bool & seg_map_closed  # 只保留在 seg_map_closed 中的白色區域
         seg_map_final[mask_bool] = i + 1
 
+    import matplotlib.pyplot as plt
+
+    # 设置图像显示大小
+    plt.figure(figsize=(15, 5))
+
+    # 显示原始图像
+    plt.subplot(131)
+    plt.imshow(image)
+    plt.title('Original Image')
+    plt.axis('off')
+
+    # 显示二值化mask
+    plt.subplot(132)
+    plt.imshow(predicted_mask, cmap='gray')
+    plt.title('Binarized Mask')
+    plt.axis('off')
+
+    # 显示带颜色标记的最终分割结果
+    plt.subplot(133)
+    plt.imshow(seg_map_final, cmap='tab20')  # 使用tab20颜色图来显示不同的标签
+    plt.title('Binarized Mask with Points')
+    plt.axis('off')
+
 
 
