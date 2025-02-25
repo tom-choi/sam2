@@ -267,5 +267,52 @@ def main_prediction_process(
         mask_bool = mask_bool & seg_map_closed  # 只保留在 seg_map_closed 中的白色區域
         seg_map_final[mask_bool] = i + 1
 
+    import matplotlib.pyplot as plt
+
+    # 设置图像显示大小
+    plt.figure(figsize=(15, 5))
+
+    # 显示原始图像
+    plt.subplot(131)
+    plt.imshow(image)
+    plt.title('Original Image')
+    plt.axis('off')
+
+    # 显示二值化mask
+    plt.subplot(132)
+    plt.imshow(predicted_mask, cmap='gray')
+    plt.title('Binarized Mask')
+    plt.axis('off')
+
+    # 显示带颜色标记的最终分割结果
+    plt.subplot(133)
+    plt.imshow(seg_map_final, cmap='tab20')  # 使用tab20颜色图来显示不同的标签
+    plt.title('Binarized Mask with Points')
+    plt.axis('off')
+
+    # 如果想看中间过程的结果，也可以添加如下代码：
+    plt.figure(figsize=(15, 5))
+
+    # 显示清理小物体后的结果
+    plt.subplot(131)
+    plt.imshow(seg_map_cleaned, cmap='gray')
+    plt.title('After Remove Small Objects')
+    plt.axis('off')
+
+    # 显示膨胀操作后的结果
+    plt.subplot(132)
+    plt.imshow(binary_dilation(seg_map_cleaned, selem), cmap='gray')
+    plt.title('After Dilation')
+    plt.axis('off')
+
+    # 显示最终的闭运算结果
+    plt.subplot(133)
+    plt.imshow(seg_map_closed, cmap='gray')
+    plt.title('After Closing Operation')
+    plt.axis('off')     
+
+    plt.tight_layout()
+    plt.show()
+
 
 
