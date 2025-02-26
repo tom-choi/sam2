@@ -424,7 +424,7 @@ class ImagePreprocessor:
         return image.astype(np.uint8)
 
     
-    @staticmethod # 生成前后景mask
+    @staticmethod # 生成前后景mask,此版本是基于轮廓检测的
     def generate_mask(image, background_threshold=10, min_contour_area=100):
         """
         改进的mask生成，基于轮廓检测
