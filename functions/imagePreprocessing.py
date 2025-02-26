@@ -115,7 +115,7 @@ class ImagePreprocessor:
         
         return image, mask
 
-#################### 以下是详细的图像预处理的函数(没说明那就是对单张大图进行处理) ##########
+    ################### 以下是详细的图像预处理的函数(没说明那就是对单张大图进行处理) ##########
 
     # 图像归一化
     ''' 主要用途是把图片统一设置亮度、对比度、饱和度，
@@ -143,6 +143,7 @@ class ImagePreprocessor:
     然后根据边缘的缺少像素来执行填补像素的function。
     这里的旋转角度可以设定，也可以随机设定。
     '''
+    @staticmethod
     def rotate(img, angle, center=None, scale=1.0):
         h, w = img.shape[:2]
         if center is None:
@@ -459,6 +460,7 @@ class ImagePreprocessor:
         这里缩放同时也会强化图像的分辨率，增强模型的鲁棒性。
         图像比例需要自定，但一般由外部传入的ratio决定。
     '''
+    @staticmethod
     def resize(img, size):
         img = cv2.resize(img, size)
         return img

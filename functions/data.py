@@ -10,7 +10,7 @@ import matplotlib.pyplot as plt
 from torch.utils.data import Dataset
 import random
 
-from functions.imagePreprocessing import  ImagePreprocessor
+from functions.imagePreprocessing import  ImagePreprocessor, PreProcess
 #使用 function：from functions.data import prepare_dataset
 
 
@@ -208,7 +208,7 @@ class SegmentationDataset(torch.utils.data.Dataset):
             mask = cv2.imread(item["annotation"], cv2.IMREAD_GRAYSCALE)
             
             # 前置处理
-            image, mask = self.preprocessor.preprocess(image, mask, patch_size)
+            image, mask = PreProcess(image, mask, patch_size)
        
             # 图像增强处理
             
