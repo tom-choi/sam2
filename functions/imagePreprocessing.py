@@ -639,5 +639,3 @@ class ImagePreprocessor:
         self.show_image(mask, title="Processed Mask")
 
         return image, mask, mask_background
-
-

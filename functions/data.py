@@ -10,7 +10,7 @@ import matplotlib.pyplot as plt
 from torch.utils.data import Dataset
 import random
 
-from functions.imagePreprocessing import  ImagePreprocessor, PreProcess
+from functions.imagePreprocessing import ImagePreprocessor
 #使用 function：from functions.data import prepare_dataset
 
 
@@ -197,6 +197,7 @@ class SegmentationDataset(torch.utils.data.Dataset):
         self.all_positions = []
         self.all_sizes = []
         self.all_paths = []
+        self.all_mask_paths = []
         
         # 预处理模块初始化
         self.preprocessor = ImagePreprocessor()
@@ -208,7 +209,7 @@ class SegmentationDataset(torch.utils.data.Dataset):
             mask = cv2.imread(item["annotation"], cv2.IMREAD_GRAYSCALE)
             
             # 前置处理
-            image, mask = PreProcess(image, mask, patch_size)
+            image, mask = self.preprocessor.preprocess(image, mask, patch_size)
        
             # 图像增强处理
             
@@ -227,6 +228,7 @@ class SegmentationDataset(torch.utils.data.Dataset):
                 self.all_positions.append(positions)
                 self.all_sizes.append(original_size)
                 self.all_paths.append(item["image"])
+                self.all_mask_paths.append(item["annotation"])
 
     def __len__(self):
         return len(self.all_patches)
@@ -237,15 +239,12 @@ class SegmentationDataset(torch.utils.data.Dataset):
             'mask_patches': self.all_masks[idx],
             'positions': self.all_positions[idx],
             'original_size': self.all_sizes[idx],
-            'image_path': self.all_paths[idx]
+            'image_path': self.all_paths[idx],
+            'mask_path': self.all_mask_paths[idx]
         } 
     
     def read_image(self, idx):  # read and resize image and mask
-        img = cv2.imread(self.all_paths[idx])[..., ::-1]  # Convert BGR to RGB
-        r = np.min([1334 / img.shape[1], 1334 / img.shape[0]])
-        img = cv2.resize(img, (int(img.shape[1] * r), int(img.shape[0] * r)))
-        
-        return img, self.all_paths[idx]
+        return self.all_paths[idx], self.all_mask_paths[idx]
 
     @staticmethod
     def verify_data_list(data_list: List[Dict[str, str]]) -> bool:

@@ -13,6 +13,8 @@ from sam2.build_sam import build_sam2
 from sam2.sam2_image_predictor import SAM2ImagePredictor
 from skimage import measure
 
+i = 0
+
 def read_batch(data, visualize_data=False):
     # 選擇隨機條目
     ent = data[np.random.randint(len(data))]
@@ -97,12 +99,14 @@ def read_batch(data, visualize_data=False):
 # Img1, masks1, points1, num_masks = read_batch(train_data, visualize_data=True)
 
 # 可修改的參數
-MIN_SIZE = 100    # 移除小於此尺寸的白色區域
-SELEM_RADIUS = 3  # 形態學操作中圓形結構元素的半徑
+PATCH_SIZE = 100  # Patch大小,影響分割精度和速度。更大的patch可能提高精度,但會增加計算時間。
+MIN_SIZE = 25  # 移除小於此尺寸的白色區域。更大的值會移除更多的小區域。
+SELEM_RADIUS = 4  # 形態學操作中圓形結構元素的半徑。更大的半徑會導致更多的平滑。
+OVERLAP_THRESHOLD = 0.15  # 用於判斷是否保留重疊區域的閾值。更高的值會保留更多的重疊區域。
 
 def read_batch_speical(Img, ann_map, visualize_data=False):
     # 調整圖像和遮罩大小
-    r = min(1024 / Img.shape[1], 1024 / Img.shape[0])  # 縮放因子
+    r = min(1334 / Img.shape[1], 1334 / Img.shape[0])  # 縮放因子
     Img = cv2.resize(Img, (int(Img.shape[1] * r), int(Img.shape[0] * r)))
     ann_map = cv2.resize(ann_map, (int(ann_map.shape[1] * r), int(ann_map.shape[0] * r)), interpolation=cv2.INTER_NEAREST)
 
@@ -206,68 +210,74 @@ def get_points(mask, num_points):  # Sample points inside the input mask
 # 获取预测的mask
 # predicted_mask = get_prediction_mask(model, image)
 
-OVERLAP_THRESHOLD = 0.15  # 用於判斷是否保留重疊區域的閾值。更高的值會保留更多的重疊區域。
-
 def main_prediction_process(
         image, predicted_mask, 
         sam2_checkpoint = "./checkpoints/sam2.1_hiera_large.pt", 
         model_cfg = "configs/sam2.1/sam2.1_hiera_l.yaml"
     ):
 
+    i = 1 # ON9
+
+    print("Creating SAM2 segmentation Model...")
+
     sam2_model = build_sam2(model_cfg, sam2_checkpoint, device="cuda")
     # Build net and load weights
-    predictor = SAM2ImagePredictor(sam2_model)
+
+    print("SAM2 segmentation Model Created!")
+
+    predictor2 = SAM2ImagePredictor(sam2_model)
+
 
     # Generate random points for the input
-    _, _, input_points, _ = read_batch_speical(image, predicted_mask, True)
+    _, _, input_points, _ = read_batch_speical(image, predicted_mask, True) # predicted_mask ---> org_mask
 
     # Perform inference and predict masks
     # 用box(整個圖像)的形式輸入prompt
     with torch.no_grad():
-        predictor.set_image(image)
-        masks, scores, logits = predictor.predict(
+        predictor2.set_image(image)
+        masks, scores, logits = predictor2.predict(
             point_coords=input_points,
             point_labels=np.ones([input_points.shape[0], 1])
         )
 
     # Process the predicted masks and sort by scores
-    np_masks = np.array(masks[:, 0])
-    np_scores = scores[:, 0]
-    sorted_masks = np_masks[np.argsort(np_scores)][::-1]
+    np_masks_2 = np.array(masks[:, 0])
+    np_scores_2 = scores[:, 0]
+    sorted_masks_2 = np_masks_2[np.argsort(np_scores_2)][::-1]
 
     # Initialize segmentation map and occupancy mask
-    occupancy_masks = np.zeros_like(sorted_masks[0], dtype=bool)
+    occupancy_mask_2 = np.zeros_like(sorted_masks_2[0], dtype=bool)
 
     # Combine masks to create the final segmentation map
-    for i in range(sorted_masks.shape[0]):
-        masks = sorted_masks[i]
-        if (masks * occupancy_masks).sum() / masks.sum() > OVERLAP_THRESHOLD:
+    for i in range(sorted_masks_2.shape[0]):
+        mask_2 = sorted_masks_2[i]
+        if (mask_2 * occupancy_mask_2).sum() / mask_2.sum() > OVERLAP_THRESHOLD:
             continue
 
-    mask_bool = masks.astype(bool)
-    mask_bool[occupancy_masks] = False  # Set overlapping areas to False in the mask
-    occupancy_masks[mask_bool] = True  # Update occupancy_mask
+        mask_bool_2 = mask_2.astype(bool)
+        mask_bool_2[occupancy_mask_2] = False  # Set overlapping areas to False in the mask
+        occupancy_mask_2[mask_bool_2] = True  # Update occupancy_mask
 
     # 移除小的白色區域
-    seg_map_cleaned = remove_small_objects(occupancy_masks, min_size=MIN_SIZE, connectivity=2)
+    seg_map2_cleaned = remove_small_objects(occupancy_mask_2, min_size=MIN_SIZE, connectivity=2)
 
     # 創建圓形結構元素
     selem = disk(SELEM_RADIUS)
 
     # 執行閉運算 (先膨脹後腐蝕)
-    seg_map_closed = binary_erosion(binary_dilation(seg_map_cleaned, selem), selem)
+    seg_map2_closed = binary_erosion(binary_dilation(seg_map2_cleaned, selem), selem)
 
-    # 將 seg_map_closed 轉換回原始數據類型
-    seg_map_final = np.zeros_like(seg_map_closed, dtype=np.uint8)
+    # 將 seg_map2_closed 轉換回原始數據類型
+    seg_map2_final = np.zeros_like(seg_map2_closed, dtype=np.uint8)
 
     # 給mask上色
-    for i in range(sorted_masks.shape[0]):
-        masks = sorted_masks[i]
-        mask_bool = masks.astype(bool)
-        mask_bool = mask_bool & seg_map_closed  # 只保留在 seg_map_closed 中的白色區域
-        seg_map_final[mask_bool] = i + 1
+    for i in range(sorted_masks_2.shape[0]):
+        mask_2 = sorted_masks_2[i]
+        mask_bool_2 = mask_2.astype(bool)
+        mask_bool_2 = mask_bool_2 & seg_map2_closed  # 只保留在 seg_map2_closed 中的白色區域
+        seg_map2_final[mask_bool_2] = i + 1
 
-    import matplotlib.pyplot as plt
+    
 
     # 设置图像显示大小
     plt.figure(figsize=(15, 5))
@@ -286,28 +296,31 @@ def main_prediction_process(
 
     # 显示带颜色标记的最终分割结果
     plt.subplot(133)
-    plt.imshow(seg_map_final, cmap='tab20')  # 使用tab20颜色图来显示不同的标签
+    plt.imshow(seg_map2_final, cmap='tab20')  # 使用tab20颜色图来显示不同的标签
     plt.title('Binarized Mask with Points')
     plt.axis('off')
 
-    # 如果想看中间过程的结果，也可以添加如下代码：
+    plt.tight_layout()
+    plt.show()
+
+
     plt.figure(figsize=(15, 5))
 
     # 显示清理小物体后的结果
     plt.subplot(131)
-    plt.imshow(seg_map_cleaned, cmap='gray')
+    plt.imshow(seg_map2_cleaned, cmap='gray')
     plt.title('After Remove Small Objects')
     plt.axis('off')
 
     # 显示膨胀操作后的结果
     plt.subplot(132)
-    plt.imshow(binary_dilation(seg_map_cleaned, selem), cmap='gray')
+    plt.imshow(binary_dilation(seg_map2_cleaned, selem), cmap='gray')
     plt.title('After Dilation')
     plt.axis('off')
 
     # 显示最终的闭运算结果
     plt.subplot(133)
-    plt.imshow(seg_map_closed, cmap='gray')
+    plt.imshow(seg_map2_closed, cmap='gray')
     plt.title('After Closing Operation')
     plt.axis('off')     
 
@@ -315,7 +328,7 @@ def main_prediction_process(
     plt.show()
 
     # save as final_segmentation.jpg
-    cv2.imwrite('final_segmentation.jpg', seg_map_final.astype(np.uint8) * 255)
+    # cv2.imwrite('final_segmentation.jpg', seg_map2_final.astype(np.uint8) * 255)
 
     
 
