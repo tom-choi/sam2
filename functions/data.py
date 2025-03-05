@@ -10,6 +10,8 @@ import matplotlib.pyplot as plt
 from torch.utils.data import Dataset
 import random
 
+from tqdm import tqdm # 3.5 下午新增
+
 from functions.imagePreprocessing import ImagePreprocessor
 #使用 function：from functions.data import prepare_dataset
 
@@ -176,60 +178,100 @@ def prepare_dataset(dataset_name: str) -> Tuple[List[Dict[str, str]], List[Dict[
     #  创建数据集
     # train_dataset = SegmentationDataset(train_data)
     # test_dataset = SegmentationDataset(test_data)
-class SegmentationDataset(torch.utils.data.Dataset):
-    def __init__(self, data_list, patch_size=128, stride=64, transform=None):
+class SegmentationDataset(torch.utils.data.Dataset):    
+    def __init__(self, data_list, patch_size=128, stride=64, preProcess=True, transform=None):
         """
         初始化数据集
         Args:
             data_list: 包含图像和标注路径的列表
             patch_size: 切片大小
             stride: 滑动窗口步长
+            preProcess: 是否进行预处理
             transform: 数据增强转换
         """
         self.data_list = data_list
         self.patch_size = patch_size
         self.stride = stride
         self.transform = transform
-
+        self.preProcess = preProcess
+        self.preprocessor = ImagePreprocessor()
+        
         # 预处理所有图像的patches
         self.all_patches = []
         self.all_masks = []
         self.all_positions = []
-        self.all_sizes = []
-        self.all_paths = []
+        self.all_original_sizes = []
+        self.all_image_paths = []
         self.all_mask_paths = []
+        self.image_indices = []  # 新增: 记录每个patch对应的原始图像索引
         
         # 预处理模块初始化
-        self.preprocessor = ImagePreprocessor()
+        print("开始数据集预处理...")
         
-        # 这里是每张图片和mask的内容设置，预处理内容都放在这里
-        for item in data_list:
+        # 处理每张图片
+        for idx, item in enumerate( tqdm(data_list, desc="处理图像")):
+            # 读取图像
             image = cv2.imread(item["image"])
             image = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
             mask = cv2.imread(item["annotation"], cv2.IMREAD_GRAYSCALE)
             
             # 前置处理
-            image, mask = self.preprocessor.preprocess(image, mask, patch_size)
-       
-            # 图像增强处理
+            if preProcess:
+                image, mask = self.preprocessor.preprocess(image, mask, patch_size)
             
-            # patch分块处理
-            patches, mask_patches, positions, original_size = self.process_image_to_patches(image, mask)
+            # 获取图像尺寸
+            h, w = image.shape[:2]
+            original_size = (h, w)
             
-            for patch, mask_patch in zip(patches, mask_patches):
+            # 计算所有有效的patch位置
+            positions = self._calculate_positions(h, w)
+            
+            # 处理每个位置的patch
+            for y, x in positions:
+                # 提取patch
+                patch = image[y:y+self.patch_size, x:x+self.patch_size].copy()
+                mask_patch = mask[y:y+self.patch_size, x:x+self.patch_size].copy()
+                
+                # 数据增强
                 if self.transform:
                     patch = self.transform(patch)
                 
+                # 转换为tensor
                 patch = torch.FloatTensor(patch.transpose(2, 0, 1)) / 255.0
                 mask_patch = torch.FloatTensor(mask_patch).unsqueeze(0) / 255.0
                 
+                # 存储结果
                 self.all_patches.append(patch)
                 self.all_masks.append(mask_patch)
-                self.all_positions.append(positions)
-                self.all_sizes.append(original_size)
-                self.all_paths.append(item["image"])
+                self.all_positions.append((y, x))
+                self.all_original_sizes.append(original_size)
+                self.all_image_paths.append(item["image"])
                 self.all_mask_paths.append(item["annotation"])
+                self.image_indices.append(idx)  # 记录原始图像索引
+        
+        print(f"数据集预处理完成，共生成 {len(self.all_patches)} 个patch")
 
+    def _calculate_positions(self, h, w):
+        """计算图像中所有有效的patch位置"""
+        positions = []
+        
+        # 横向和纵向的滑动位置
+        h_idx = np.arange(0, h-self.patch_size+1, self.stride)
+        w_idx = np.arange(0, w-self.patch_size+1, self.stride)
+        
+        # 确保处理到边缘
+        if h % self.stride != 0 and h > self.patch_size:
+            h_idx = np.append(h_idx, h-self.patch_size)
+        if w % self.stride != 0 and w > self.patch_size:
+            w_idx = np.append(w_idx, w-self.patch_size)
+        
+        # 生成所有位置组合
+        for y in h_idx:
+            for x in w_idx:
+                positions.append((int(y), int(x)))
+                
+        return positions
+    
     def __len__(self):
         return len(self.all_patches)
 
@@ -238,10 +280,45 @@ class SegmentationDataset(torch.utils.data.Dataset):
             'patches': self.all_patches[idx],
             'mask_patches': self.all_masks[idx],
             'positions': self.all_positions[idx],
-            'original_size': self.all_sizes[idx],
-            'image_path': self.all_paths[idx],
-            'mask_path': self.all_mask_paths[idx]
-        } 
+            'original_size': self.all_original_sizes[idx],
+            'image_path': self.all_image_paths[idx],
+            'mask_path': self.all_mask_paths[idx],
+            'image_idx': self.image_indices[idx]  # 新增: 返回原始图像索引
+        }
+        
+    def get_stats(self):
+        """返回数据集的统计信息"""
+        unique_images = len(set(self.image_indices))
+        patches_per_image = len(self.all_patches) / unique_images if unique_images > 0 else 0
+        
+        return {
+            'total_patches': len(self.all_patches),
+            'unique_images': unique_images,
+            'patches_per_image': patches_per_image,
+            'patch_size': self.patch_size,
+            'stride': self.stride
+        }
+        
+    def filter_patches(self, min_content=0.05):
+        """过滤掉内容很少的patch（可选）"""
+        filtered_indices = []
+        
+        for i, mask in enumerate(self.all_masks):
+            # 计算mask中前景像素比例
+            foreground_ratio = mask.mean().item()
+            if foreground_ratio >= min_content:
+                filtered_indices.append(i)
+        
+        # 创建新的过滤后的数据列表
+        self.all_patches = [self.all_patches[i] for i in filtered_indices]
+        self.all_masks = [self.all_masks[i] for i in filtered_indices]
+        self.all_positions = [self.all_positions[i] for i in filtered_indices]
+        self.all_original_sizes = [self.all_original_sizes[i] for i in filtered_indices]
+        self.all_image_paths = [self.all_image_paths[i] for i in filtered_indices]
+        self.all_mask_paths = [self.all_mask_paths[i] for i in filtered_indices]
+        self.image_indices = [self.image_indices[i] for i in filtered_indices]
+        
+        print(f"过滤后保留了 {len(self.all_patches)} 个patch（原有 {len(filtered_indices)} 个）")
     
     def read_image(self, idx):  # read and resize image and mask
         return self.all_paths[idx], self.all_mask_paths[idx]
