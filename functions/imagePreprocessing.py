@@ -185,12 +185,215 @@ class ImagePreprocessor:
 
     ################### 以下是详细的图像预处理的函数(没说明那就是对单张大图进行处理) ##########
 
-    # 图像归一化
+# 图像归一化(两种方法)
     ''' 主要用途是把图片统一设置亮度、对比度、饱和度，
         使得图片的颜色分布更加均匀，从而提高模型的泛化能力。
         归一化的操作统一是对整张图片做的而不是对patche做的。
     
     '''
+    ##########
+    # 改进尝试，3.3版本，保留更多细节的归一化，建议使用
+    @staticmethod  # 此方法需要结合前后景识别生成的mask去使用
+    def normalize_image(image, mask=None, low_percentile=1, high_percentile=99):
+        """
+        改进的归一化处理，考虑有效区域
+        Args:
+            image: 原始图像 (H, W, C)
+            mask: 有效区域掩码 (H, W)，None表示全图有效
+            low_percentile: 低百分位数剪裁点（默认1%）
+            high_percentile: 高百分位数剪裁点（默认99%）
+        Returns:
+            归一化后的图像
+        """
+        image = image.astype(np.float32)
+        
+        if mask is None:
+            # 如果没有提供mask，使用全图
+            # 改进：使用百分位数而不是简单均值和标准差，以减少异常值影响
+            normalized = np.zeros_like(image, dtype=np.float32)
+            for c in range(image.shape[2]):
+                channel = image[..., c]
+                low_val = np.percentile(channel, low_percentile)
+                high_val = np.percentile(channel, high_percentile)
+                
+                # 避免分母为0
+                if high_val > low_val:
+                    normalized[..., c] = np.clip(255 * (channel - low_val) / (high_val - low_val), 0, 255)
+                else:
+                    normalized[..., c] = channel
+            
+            return normalized.astype(np.uint8)
+        else:
+            # 只计算有效区域的统计量
+            mask = mask.astype(bool)
+            normalized = np.zeros_like(image, dtype=np.float32)
+            
+            for c in range(image.shape[2]):
+                channel = image[..., c]
+                valid_pixels = channel[mask]
+                
+                if len(valid_pixels) > 0:
+                    # 使用百分位数，而不是均值和标准差
+                    low_val = np.percentile(valid_pixels, low_percentile)
+                    high_val = np.percentile(valid_pixels, high_percentile)
+                    
+                    # 对整个通道应用变换，但统计量只基于mask区域
+                    if high_val > low_val:
+                        normalized[..., c] = np.clip(255 * (channel - low_val) / (high_val - low_val), 0, 255)
+                    else:
+                        normalized[..., c] = channel
+                else:
+                    normalized[..., c] = channel
+            
+            return normalized.astype(np.uint8)
+
+    ###########
+    
+    ###########
+    # 旧版本3.3之前的归一化方法
+    
+    # @staticmethod # 此方法需要结合前后景识别生成的mask去使用
+    # def normalize_image(image, mask=None):
+    #     """
+    #     改进的归一化处理，考虑有效区域
+    #     Args:
+    #         image: 原始图像 (H, W, C)
+    #         mask: 有效区域掩码 (H, W)，None表示全图有效
+    #     Returns:
+    #         归一化后的图像
+    #     """
+    #     image = image.astype(np.float32)
+        
+    #     if mask is None:
+    #         # 如果没有提供mask，使用全图
+    #         mean = np.mean(image, axis=(0, 1))
+    #         std = np.std(image, axis=(0, 1))
+    #     else:
+    #         # 只计算有效区域的统计量
+    #         mask = mask.astype(bool)
+    #         mean = []
+    #         std = []
+    #         for c in range(image.shape[2]):
+    #             channel = image[..., c]
+    #             mean.append(np.mean(channel[mask]))
+    #             std.append(np.std(channel[mask]))
+    #         mean = np.array(mean)
+    #         std = np.array(std)
+        
+    #     # 归一化处理
+    #     image = (image - mean) / (std + 1e-7)
+    #     image = np.clip(image * 255, 0, 255)
+        
+    #     return image.astype(np.uint8)
+
+    ###########
+
+
+# 直方图均衡化(两种方法)
+    
+    ###########    
+    # 改进尝试，3.3版本，用到CLAHE算法
+    
+    # @staticmethod  
+    # def histogram_equalization(image, mask=None, clip_limit=2.0, tile_grid_size=(8, 8)):
+    #     """
+    #     改进的直方图均衡化，使用CLAHE算法并考虑有效区域
+    #     Args:
+    #         image: 原始图像 (H, W, C)
+    #         mask: 有效区域掩码 (H, W)，None表示全图有效
+    #         clip_limit: CLAHE算法的对比度限制参数
+    #         tile_grid_size: CLAHE算法的网格大小
+    #     Returns:
+    #         均衡化后的图像
+    #     """
+    #     # 转换到LAB色彩空间（比HSV更适合处理医学图像）
+    #     lab = cv2.cvtColor(image, cv2.COLOR_RGB2LAB)
+    #     l_channel = lab[:,:,0]
+        
+    #     # 创建CLAHE对象
+    #     clahe = cv2.createCLAHE(clipLimit=clip_limit, tileGridSize=tile_grid_size)
+        
+    #     if mask is None:
+    #         # 如果没有提供mask，对整个亮度通道应用CLAHE
+    #         l_channel = clahe.apply(l_channel)
+    #     else:
+    #         # 只对有效区域进行CLAHE处理
+    #         mask = mask.astype(bool)
+            
+    #         # 为了只处理掩码区域，我们需要创建副本
+    #         l_output = l_channel.copy()
+            
+    #         # 在掩码区域应用CLAHE
+    #         # 注意：这里我们仍然对整个通道应用CLAHE，但只复制掩码区域的结果
+    #         l_equalized = clahe.apply(l_channel)
+    #         l_output[mask] = l_equalized[mask]
+            
+    #         # 更新亮度通道
+    #         l_channel = l_output
+        
+    #     # 更新LAB图像的亮度通道
+    #     lab[:,:,0] = l_channel
+        
+    #     # 将LAB转回RGB
+    #     result = cv2.cvtColor(lab, cv2.COLOR_LAB2RGB)
+        
+    #     # 轻微锐化以增强细胞边界（可选，如果效果不好可以注释掉）
+    #     kernel = np.array([[-0.5,-0.5,-0.5], 
+    #                     [-0.5, 5,-0.5],
+    #                     [-0.5,-0.5,-0.5]])
+    #     result = cv2.filter2D(result, -1, kernel)
+        
+    #     return result.astype(np.uint8)
+
+    ###########   
+    
+    # 3.3前的旧版本
+    @staticmethod # 此方法需要结合前后景识别生成的mask去使用,旧版本
+    def histogram_equalization(image, mask=None):
+        """
+        改进的直方图均衡化，考虑有效区域
+        Args:
+            image: 原始图像 (H, W, C)
+            mask: 有效区域掩码 (H, W)，None表示全图有效
+        Returns:
+            均衡化后的图像
+        """
+        # 只转换一次颜色空间
+        hsv = cv2.cvtColor(image, cv2.COLOR_RGB2HSV)
+        v_channel = hsv[..., 2]
+        
+        if mask is None:
+            # 如果没有提供mask，使用全图
+            v_channel = cv2.equalizeHist(v_channel)
+        else:
+            # 只对有效区域进行均衡化
+            mask = mask.astype(bool)
+            
+            # 保存原始有效区域的V通道值
+            valid_v = v_channel[mask]
+            
+            # 计算直方图
+            hist = cv2.calcHist([valid_v], [0], None, [256], [0, 256])
+            
+            # 计算累积分布函数
+            cdf = hist.cumsum()
+            
+            # 避免除以0的情况，确保cdfs[-1]不为0
+            cdf_normalized = cdf * 255 / (cdf[-1] if cdf[-1] != 0 else 1)
+            
+            # 应用均衡化，直接在原数组上进行操作
+            v_channel[mask] = np.interp(valid_v, np.arange(256), cdf_normalized)
+        
+        # 最后一次颜色空间转换
+        hsv[..., 2] = v_channel
+        image = cv2.cvtColor(hsv, cv2.COLOR_HSV2RGB)
+        
+        return image.astype(np.uint8)
+    
+    ###########
+   
+   
+
 
 
     # 图像细胞比例矫正
@@ -221,96 +424,9 @@ class ImagePreprocessor:
         return img
 
 
-#################################################################
-#下面的是没有前后景，直接进行整张图片的处理，可能带来偏差
 
-    # @staticmethod
-    # def adjust_brightness(image, value=0):
-    #     """
-    #     调整图像的亮度
-    #     Args:
-    #         image: 原始图像 (H, W, C)
-    #         value: 亮度调整值，正数增加亮度，负数减少亮度
-    #     Returns:
-    #         调整亮度后的图像
-    #     """
-    #     hsv = cv2.cvtColor(image, cv2.COLOR_RGB2HSV)
-    #     h, s, v = cv2.split(hsv)
 
-    #     # 调整亮度
-    #     lim = 255 - value
-    #     v[v > lim] = 255
-    #     v[v <= lim] = np.clip(v[v <= lim] + value, 0, 255)
 
-    #     final_hsv = cv2.merge((h, s, v))
-    #     image = cv2.cvtColor(final_hsv, cv2.COLOR_HSV2RGB)
-
-    #     # 确保图像数据类型为 uint8
-    #     image = image.astype(np.uint8)
-
-    #     return image
-
-    # @staticmethod
-    # def adjust_contrast(image, alpha=1.0):
-    #     """
-    #     调整图像的对比度
-    #     Args:
-    #         image: 原始图像 (H, W, C)
-    #         alpha: 对比度调整系数，大于1增加对比度，小于1减少对比度
-    #     Returns:
-    #         调整对比度后的图像
-    #     """
-    #     image = cv2.cvtColor(image, cv2.COLOR_RGB2HSV)
-    #     image[..., 2] = cv2.convertScaleAbs(image[..., 2], alpha=alpha, beta=0)
-    #     image = cv2.cvtColor(image, cv2.COLOR_HSV2RGB)
-    #     return image
-
-    # @staticmethod
-    # def histogram_equalization(image):
-    #     """
-    #     直方图均衡化
-    #     Args:
-    #         image: 原始图像 (H, W, C)
-    #     Returns:
-    #         均衡化后的图像
-    #     """
-    #     # 将图像转换为HSV空间
-    #     hsv = cv2.cvtColor(image, cv2.COLOR_RGB2HSV)
-        
-    #     # 对V通道进行直方图均衡化
-    #     hsv[..., 2] = cv2.equalizeHist(hsv[..., 2])
-        
-    #     # 转换回RGB空间
-    #     image = cv2.cvtColor(hsv, cv2.COLOR_HSV2RGB)
-    #     return image
-    
-    
-    # @staticmethod
-    # def normalize_image(image):
-    #     """
-    #     归一化图像
-    #     Args:
-    #         image: 原始图像 (H, W, C)
-    #     Returns:
-    #         归一化后的图像
-    #     """
-    #     # 将图像转换为float32类型
-    #     image = image.astype(np.float32)
-        
-    #     # 计算均值和标准差
-    #     mean = np.mean(image, axis=(0, 1))
-    #     std = np.std(image, axis=(0, 1))
-        
-    #     # 归一化处理
-    #     image = (image - mean) / (std + 1e-7)
-        
-    #     # 将值映射到[0, 255]
-    #     image = np.clip(image * 255, 0, 255)
-        
-    #     return image.astype(np.uint8)
-
-###################################################################
-# 下面的是加入前后景判断的所有处理效果
 
     # 亮度调整
     @staticmethod # 此方法需要结合前后景识别生成的mask去使用
@@ -381,149 +497,12 @@ class ImagePreprocessor:
         
         return cv2.cvtColor(hsv, cv2.COLOR_HSV2RGB)
     
-    # 归一化
-    @staticmethod  # 此方法需要结合前后景识别生成的mask去使用
-    def normalize_image(image, mask=None, low_percentile=1, high_percentile=99):
-        """
-        改进的归一化处理，考虑有效区域
-        Args:
-            image: 原始图像 (H, W, C)
-            mask: 有效区域掩码 (H, W)，None表示全图有效
-            low_percentile: 低百分位数剪裁点（默认1%）
-            high_percentile: 高百分位数剪裁点（默认99%）
-        Returns:
-            归一化后的图像
-        """
-        image = image.astype(np.float32)
-        
-        if mask is None:
-            # 如果没有提供mask，使用全图
-            # 改进：使用百分位数而不是简单均值和标准差，以减少异常值影响
-            normalized = np.zeros_like(image, dtype=np.float32)
-            for c in range(image.shape[2]):
-                channel = image[..., c]
-                low_val = np.percentile(channel, low_percentile)
-                high_val = np.percentile(channel, high_percentile)
-                
-                # 避免分母为0
-                if high_val > low_val:
-                    normalized[..., c] = np.clip(255 * (channel - low_val) / (high_val - low_val), 0, 255)
-                else:
-                    normalized[..., c] = channel
-            
-            return normalized.astype(np.uint8)
-        else:
-            # 只计算有效区域的统计量
-            mask = mask.astype(bool)
-            normalized = np.zeros_like(image, dtype=np.float32)
-            
-            for c in range(image.shape[2]):
-                channel = image[..., c]
-                valid_pixels = channel[mask]
-                
-                if len(valid_pixels) > 0:
-                    # 使用百分位数，而不是均值和标准差
-                    low_val = np.percentile(valid_pixels, low_percentile)
-                    high_val = np.percentile(valid_pixels, high_percentile)
-                    
-                    # 对整个通道应用变换，但统计量只基于mask区域
-                    if high_val > low_val:
-                        normalized[..., c] = np.clip(255 * (channel - low_val) / (high_val - low_val), 0, 255)
-                    else:
-                        normalized[..., c] = channel
-                else:
-                    normalized[..., c] = channel
-            
-            return normalized.astype(np.uint8)
 
-    # 直方图均衡化
-    @staticmethod  # 改进尝试
-    def histogram_equalization(image, mask=None, clip_limit=2.0, tile_grid_size=(8, 8)):
-        """
-        改进的直方图均衡化，使用CLAHE算法并考虑有效区域
-        Args:
-            image: 原始图像 (H, W, C)
-            mask: 有效区域掩码 (H, W)，None表示全图有效
-            clip_limit: CLAHE算法的对比度限制参数
-            tile_grid_size: CLAHE算法的网格大小
-        Returns:
-            均衡化后的图像
-        """
-        # 转换到LAB色彩空间（比HSV更适合处理医学图像）
-        lab = cv2.cvtColor(image, cv2.COLOR_RGB2LAB)
-        l_channel = lab[:,:,0]
-        
-        # 创建CLAHE对象
-        clahe = cv2.createCLAHE(clipLimit=clip_limit, tileGridSize=tile_grid_size)
-        
-        if mask is None:
-            # 如果没有提供mask，对整个亮度通道应用CLAHE
-            l_channel = clahe.apply(l_channel)
-        else:
-            # 只对有效区域进行CLAHE处理
-            mask = mask.astype(bool)
-            
-            # 为了只处理掩码区域，我们需要创建副本
-            l_output = l_channel.copy()
-            
-            # 在掩码区域应用CLAHE
-            # 注意：这里我们仍然对整个通道应用CLAHE，但只复制掩码区域的结果
-            l_equalized = clahe.apply(l_channel)
-            l_output[mask] = l_equalized[mask]
-            
-            # 更新亮度通道
-            l_channel = l_output
-        
-        # 更新LAB图像的亮度通道
-        lab[:,:,0] = l_channel
-        
-        # 将LAB转回RGB
-        result = cv2.cvtColor(lab, cv2.COLOR_LAB2RGB)
-        
-        # 轻微锐化以增强细胞边界（可选，如果效果不好可以注释掉）
-        kernel = np.array([[-0.5,-0.5,-0.5], 
-                        [-0.5, 5,-0.5],
-                        [-0.5,-0.5,-0.5]])
-        result = cv2.filter2D(result, -1, kernel)
-        
-        return result.astype(np.uint8)
 
- 
- 
-    
-    # @staticmethod # 此方法需要结合前后景识别生成的mask去使用
-    # def histogram_equalization(image, mask=None):
-    #     """
-    #     改进的直方图均衡化，考虑有效区域
-    #     Args:
-    #         image: 原始图像 (H, W, C)
-    #         mask: 有效区域掩码 (H, W)，None表示全图有效
-    #     Returns:
-    #         均衡化后的图像
-    #     """
-    #     hsv = cv2.cvtColor(image, cv2.COLOR_RGB2HSV)
-        
-    #     if mask is None:
-    #         # 如果没有提供mask，使用全图
-    #         hsv[..., 2] = cv2.equalizeHist(hsv[..., 2])
-    #     else:
-    #         # 只对有效区域进行均衡化
-    #         v_channel = hsv[..., 2]
-    #         valid_v = v_channel[mask]
-            
-    #         # 计算直方图
-    #         hist = cv2.calcHist([valid_v], [0], None, [256], [0, 256])
-            
-    #         # 计算累积分布函数
-    #         cdf = hist.cumsum()
-    #         cdf_normalized = cdf * 255 / cdf[-1]
-            
-    #         # 应用均衡化
-    #         v_channel[mask] = np.interp(valid_v, np.arange(256), cdf_normalized)
-    #         hsv[..., 2] = v_channel
-        
-    #     return cv2.cvtColor(hsv, cv2.COLOR_HSV2RGB)
-    
+
+
+
+   
    
     @staticmethod # 生成前后景mask,此版本是基于轮廓检测的
     def generate_mask(image, background_threshold=10, min_contour_area=100):
@@ -581,7 +560,7 @@ class ImagePreprocessor:
         plt.show()
     
     # 总流程
-    def preprocess(self, image, mask, patch_size , value=-30 , alpha=1.3):
+    def preprocess(self, image, mask, patch_size , value=0 , alpha=1):
         """
         完整的预处理流程
         Args:
@@ -612,74 +591,10 @@ class ImagePreprocessor:
         
         return image, mask
     
-    
-    # 测试流程，用于自行查看process的效果,这里没有加入前后景限定区域
-    # def preprocess_show(self, image_path, mask_path, patch_size , value=100 , alpha=0.9):
-    #     """
-    #     完整的预处理流程
-    #     Args:
-    #         image_path (str): 原始图像路径
-    #         mask_path (str): 对应的mask路径
-    #         patch_size (int): 图像填充的patch大小
-    #     Returns:
-    #         numpy.ndarray: 处理后的图像
-    #         numpy.ndarray: 处理后的mask
-            
-            
-    #     1. 归一化处理：
-    #     基于图像的均值和标准差进行归一化
-    #     保留图像的相对亮度信息
-    #     防止极端值影响后续处理
-    #     2. 直方图均衡化：
-    #     在HSV空间进行，只调整亮度通道
-    #     增强图像对比度，同时保留颜色信息
-    #     特别适合处理低对比度图像
-    #     3. 处理顺序优化：
-    #     先进行归一化，为后续处理提供一致的基础
-    #     然后进行直方图均衡化，增强图像细节
-    #     最后调整亮度和对比度，达到目标效果
-    #     """
-    #     # 读取图像和mask
-    #     image = cv2.imread(image_path)
-    #     image = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
-    #     mask = cv2.imread(mask_path, cv2.IMREAD_GRAYSCALE)
 
-    
-    #     # 显示原始图像和mask
-    #     self.show_image(image, title="Original Image")
-    #     self.show_image(mask, title="Original Mask")
-        
-    #     # 1. 归一化处理
-    #     image = self.normalize_image(image)
-        
-    #     # 2. 直方图均衡化
-    #     image = self.histogram_equalization(image)
-        
-    #     # 3. 亮度调整
-    #     image = self.adjust_brightness(image, value)
-        
-    #     # 4. 对比度调整
-    #     image = self.adjust_contrast(image, alpha)
-        
-    #     # 处理透明边缘
-    #     image, mask = self.handle_transparent_edges(image, mask)
-
-    #     # 图像填充
-    #     image, mask = self.check_and_pad_image(image, mask, patch_size)
-
-
-
-
-
-
-    #     # 显示处理后的图像和mask
-    #     self.show_image(image, title="Processed Image")
-    #     self.show_image(mask, title="Processed Mask")
-
-    #     return image, mask
 
     # 测试单张图片的流程，用于自行查看process的效果
-    def preprocess_show(self, image_path, mask_path, patch_size , value=-30 , alpha=1.3):
+    def preprocess_show(self, image_path, mask_path, patch_size , value=0 , alpha=1.0):
         """
         完整的预处理流程
         Args:
