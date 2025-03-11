@@ -210,26 +210,30 @@ def get_points(mask, num_points):  # Sample points inside the input mask
 # 获取预测的mask
 # predicted_mask = get_prediction_mask(model, image)
 
-def main_prediction_process(
-        image, predicted_mask, 
+def build_sam2_model(
         sam2_checkpoint = "./checkpoints/sam2.1_hiera_large.pt", 
-        model_cfg = "configs/sam2.1/sam2.1_hiera_l.yaml"
+        model_cfg = "configs/sam2.1/sam2.1_hiera_l.yaml",
+        device="cuda"
+    ):
+    print("Creating SAM2 segmentation Model...")
+    model = build_sam2(model_cfg, sam2_checkpoint, device=device)
+    print("SAM2 segmentation Model Created!")
+    return model
+
+def main_prediction_process(
+        sam2_model, image, predicted_mask
     ):
 
     i = 1 # ON9
-
-    print("Creating SAM2 segmentation Model...")
-
-    sam2_model = build_sam2(model_cfg, sam2_checkpoint, device="cuda")
-    # Build net and load weights
-
-    print("SAM2 segmentation Model Created!")
 
     predictor2 = SAM2ImagePredictor(sam2_model)
 
 
     # Generate random points for the input
     _, _, input_points, _ = read_batch_speical(image, predicted_mask, True) # predicted_mask ---> org_mask
+    
+    if (len(input_points) <= 1):
+        return None, None, None, None
 
     # Perform inference and predict masks
     # 用box(整個圖像)的形式輸入prompt
@@ -328,7 +332,7 @@ def main_prediction_process(
     plt.show()
 
     # save as final_segmentation.jpg
-    # cv2.imwrite('final_segmentation.jpg', seg_map2_final.astype(np.uint8) * 255)
+    cv2.imwrite('final_segmentation.jpg', seg_map2_final.astype(np.uint8) * 255)
 
     
 
