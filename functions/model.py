@@ -574,15 +574,15 @@ def optimized_predict(model, image_path, mask_path=None, device="cuda", save_dir
     
     # 4. 保存原始和预处理数据
     # 原始图像
-    cv2.imwrite(os.path.join(save_dir, f"{file_name}_original.png"), orig_image)
+    cv2.imwrite(os.path.join(save_dir, f"original.png"), orig_image)
     
     # 原始mask（如果存在）
     if orig_mask is not None:
-        cv2.imwrite(os.path.join(save_dir, f"{file_name}_original_mask.png"), orig_mask)
+        cv2.imwrite(os.path.join(save_dir, f"original_mask.png"), orig_mask)
     
     # 预处理后的图像
     processed_image_bgr = cv2.cvtColor(processed_image, cv2.COLOR_RGB2BGR)
-    cv2.imwrite(os.path.join(save_dir, f"{file_name}_processed.png"), processed_image_bgr)
+    cv2.imwrite(os.path.join(save_dir, f"processed.png"), processed_image_bgr)
     
     # 预处理后的mask（如果存在）
     if processed_mask is not None:
@@ -591,7 +591,7 @@ def optimized_predict(model, image_path, mask_path=None, device="cuda", save_dir
             processed_mask_save = (processed_mask * 255).astype(np.uint8)
         else:
             processed_mask_save = processed_mask
-        cv2.imwrite(os.path.join(save_dir, f"{file_name}_processed_mask.png"), processed_mask_save)
+        cv2.imwrite(os.path.join(save_dir, f"processed_mask.png"), processed_mask_save)
     
     # 5. 执行预测
     model.eval()
@@ -699,15 +699,15 @@ def optimized_predict(model, image_path, mask_path=None, device="cuda", save_dir
     # 7. 保存预测结果
     # 保存预处理图像上的完整预测结果
     processed_pred_save = (processed_prediction * 255).astype(np.uint8)
-    cv2.imwrite(os.path.join(save_dir, f"{file_name}_processed_prediction.png"), processed_pred_save)
+    cv2.imwrite(os.path.join(save_dir, f"processed_prediction.png"), processed_pred_save)
     
     # 保存裁剪回原始尺寸的预测结果
     pred_save = (prediction * 255).astype(np.uint8)
-    cv2.imwrite(os.path.join(save_dir, f"{file_name}_prediction.png"), pred_save)
+    cv2.imwrite(os.path.join(save_dir, f"prediction.png"), pred_save)
     
     # 保存padding信息，便于验证
     padding_text = f"top_pad: {top_pad}, bottom_pad: {bottom_pad}, left_pad: {left_pad}, right_pad: {right_pad}"
-    with open(os.path.join(save_dir, f"{file_name}_padding_info.txt"), 'w') as f:
+    with open(os.path.join(save_dir, f"padding_info.txt"), 'w') as f:
         f.write(padding_text)
     
     print(f"所有结果已保存至 {save_dir} 目录")
@@ -719,13 +719,13 @@ def optimized_predict(model, image_path, mask_path=None, device="cuda", save_dir
     return prediction
 
 
-def save_prediction_results(model_path, image_path, mask_path=None, save_dir="test/predictData", patch_size=256, 
+def save_prediction_results(model, image_path, mask_path=None, save_dir="test/predictData", patch_size=256, 
                             stride=128, value=-30, alpha=1.3, device=None):
     """
     加载模型、执行预测并保存结果
     
     参数:
-        model_path: 模型文件路径
+        model: 模型对象
         image_path: 图像路径
         mask_path: 掩码路径，可选
         save_dir: 保存结果的目录
@@ -743,7 +743,7 @@ def save_prediction_results(model_path, image_path, mask_path=None, save_dir="te
     os.makedirs(save_dir, exist_ok=True)
     
     print(f"使用设备: {device}")
-    print(f"模型路径: {model_path}")
+    # print(f"模型路径: {model_path}")
     print(f"图像路径: {image_path}")
     print(f"掩码路径: {mask_path}")
     print(f"保存目录: {save_dir}")
@@ -781,10 +781,10 @@ def save_prediction_results(model_path, image_path, mask_path=None, save_dir="te
     else:
         preprocessed_img_display = cv2.cvtColor(preprocessed_img, cv2.COLOR_GRAY2BGR)
     
-    cv2.imwrite(os.path.join(save_dir, f"{file_name}_preprocessed.png"), preprocessed_img_display)
+    cv2.imwrite(os.path.join(save_dir, f"preprocessed.png"), preprocessed_img_display)
     
     # 加载模型
-    model = load_model(model_path, device=device)
+    # model = load_model(model_path, device=device)
     
     # 执行预测，显式指定stride参数
     pred_mask = optimized_predict(
@@ -808,7 +808,7 @@ def save_prediction_results(model_path, image_path, mask_path=None, save_dir="te
         true_mask = cv2.imread(mask_path, cv2.IMREAD_GRAYSCALE)
         # 保存二值化的真实掩码
         _, true_mask_bin = cv2.threshold(true_mask, 127, 255, cv2.THRESH_BINARY)
-        cv2.imwrite(os.path.join(save_dir, f"{file_name}_true_mask_binary.png"), true_mask_bin)
+        cv2.imwrite(os.path.join(save_dir, f"true_mask_binary.png"), true_mask_bin)
         
         # 计算IoU和Dice系数
         # 首先将掩码转换为torch tensor
@@ -833,7 +833,7 @@ def save_prediction_results(model_path, image_path, mask_path=None, save_dir="te
         print(f"Dice: {dice:.4f}")
         
         # 将指标写入文件
-        with open(os.path.join(save_dir, f"{file_name}_metrics.txt"), 'w') as f:
+        with open(os.path.join(save_dir, f"metrics.txt"), 'w') as f:
             f.write(f"IoU: {iou:.4f}\n")
             f.write(f"Dice: {dice:.4f}\n")
         
@@ -849,7 +849,7 @@ def save_prediction_results(model_path, image_path, mask_path=None, save_dir="te
         comparison[true_mask_edges > 0] = [0, 255, 0]  # 绿色
         
         # 保存对比图
-        cv2.imwrite(os.path.join(save_dir, f"{file_name}_comparison.png"), comparison)
+        cv2.imwrite(os.path.join(save_dir, f"comparison.png"), comparison)
         
         # 创建彩色掩码图 (正确:绿色, 错误:红色, 漏检:蓝色)
         color_mask = np.zeros((original_img.shape[0], original_img.shape[1], 3), dtype=np.uint8)
@@ -866,30 +866,30 @@ def save_prediction_results(model_path, image_path, mask_path=None, save_dir="te
         # 漏检 (蓝色) - 真实掩码为1但预测掩码为0
         color_mask[np.logical_and(true_mask_bin, np.logical_not(pred_mask_bin))] = [255, 0, 0]
         
-        cv2.imwrite(os.path.join(save_dir, f"{file_name}_color_mask.png"), color_mask)
+        cv2.imwrite(os.path.join(save_dir, f"color_mask.png"), color_mask)
         
         # 将彩色掩码叠加到原始图像上
         alpha_overlay = 0.5
         overlay = cv2.addWeighted(original_img, 1, color_mask, alpha_overlay, 0)
-        cv2.imwrite(os.path.join(save_dir, f"{file_name}_overlay.png"), overlay)
+        cv2.imwrite(os.path.join(save_dir, f"overlay.png"), overlay)
     
     # 保存预测掩码（不同格式）
     # 二值化掩码
     pred_mask_bin = (pred_mask > 0.5).astype(np.uint8) * 255
-    cv2.imwrite(os.path.join(save_dir, f"{file_name}_prediction_binary.png"), pred_mask_bin)
+    cv2.imwrite(os.path.join(save_dir, f"prediction_binary.png"), pred_mask_bin)
     
     # 轮廓标记
     orig_with_contours = original_img.copy()
     contours, _ = cv2.findContours(pred_mask_bin, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
     cv2.drawContours(orig_with_contours, contours, -1, (0, 255, 0), 2)
-    cv2.imwrite(os.path.join(save_dir, f"{file_name}_with_contours.png"), orig_with_contours)
+    cv2.imwrite(os.path.join(save_dir, f"with_contours.png"), orig_with_contours)
     
     # 半透明叠加
     pred_mask_color = cv2.cvtColor(pred_mask_bin, cv2.COLOR_GRAY2BGR)
     pred_mask_color[pred_mask_bin > 0] = [0, 255, 0]  # 将预测区域标记为绿色
     alpha_overlay = 0.3
     overlay = cv2.addWeighted(original_img, 1, pred_mask_color, alpha_overlay, 0)
-    cv2.imwrite(os.path.join(save_dir, f"{file_name}_prediction_overlay.png"), overlay)
+    cv2.imwrite(os.path.join(save_dir, f"prediction_overlay.png"), overlay)
     
     # 可视化结果（使用matplotlib）- 添加预处理图像
     plt.figure(figsize=(15, 12))  # 增加画布大小以适应更多的子图
@@ -949,7 +949,7 @@ def save_prediction_results(model_path, image_path, mask_path=None, save_dir="te
     plt.tight_layout()
     
     # 保存可视化结果
-    plt.savefig(os.path.join(save_dir, f"{file_name}_visualization.png"), dpi=300, bbox_inches='tight')
+    plt.savefig(os.path.join(save_dir, f"visualization.png"), dpi=300, bbox_inches='tight')
     
     # 显示可视化结果
     plt.show()
@@ -981,7 +981,7 @@ def save_prediction_results(model_path, image_path, mask_path=None, save_dir="te
     plt.ylabel('Frequency')
     
     plt.tight_layout()
-    plt.savefig(os.path.join(save_dir, f"{file_name}_histograms.png"), dpi=300, bbox_inches='tight')
+    plt.savefig(os.path.join(save_dir, f"histograms.png"), dpi=300, bbox_inches='tight')
     plt.show()
     
     print(f"所有结果已保存至 {save_dir} 目录")

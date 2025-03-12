@@ -82,8 +82,8 @@ def process_image(input_image):
     cv2.imwrite(temp_path, input_image)
 
     # 设置参数
-    model_path = "models/UnetTrain/overlaping_unet_segmentation_3.9_V0A1K.pth"  # 模型路径
-    # model_path = model_cache["unet"]
+    # model_path = "models/UnetTrain/overlaping_unet_segmentation_3.9_V0A1K.pth"  # 模型路径
+    model_path = model_cache["unet"]
     image_path = "dataset/Lucchi++/Train_In/mask0000.png"  # 测试图片路径
     mask_path = "dataset/Lucchi++/Train_Out/0.png"  # 真实掩码路径（如果有）
     save_dir = "test/predictData"  # 结果保存目录
@@ -187,7 +187,7 @@ with gr.Blocks(title="医学图像分割系统") as demo:
     # 通过CSS强制等高布局
     css = """
     .col { min-height: 200px !important; }
-    .col .image-preview { height: 400px !important; }
+    .col .image-preview { height: 100px !important; }
     """
     demo.css = css
 
