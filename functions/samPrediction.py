@@ -106,6 +106,9 @@ OVERLAP_THRESHOLD = 0.15  # 用於判斷是否保留重疊區域的閾值。更�
 
 MIN_POINT_DISTANCE = 20  # 點之間的最小距離閾值
 
+# 新增参数配置
+N_NEGATIVE_POINTS = 20  # 负点采样数量
+MIN_NEGATIVE_DISTANCE = 5  # 负点与正点的最小距离
 
 def read_batch_speical(Img, ann_map, visualize_data=False):
     # 調整圖像和遮罩大小
@@ -134,18 +137,17 @@ def read_batch_speical(Img, ann_map, visualize_data=False):
     eroded_mask = cv2.erode(processed_mask.astype(np.uint8), np.ones((5, 5), np.uint8), iterations=1)
 
     # 使用連通區域分析來找到所有獨立的白色區域
+    # 生成正点（前景点）
     labels = measure.label(eroded_mask)
     regions = measure.regionprops(labels)
-
-    # 按區域面積降序排序
-    regions_sorted = sorted(regions, key=lambda r: r.area, reverse=True)
-
-    selected_points = []
-    for region in regions_sorted:
-        # 動態距離閾值（根據區域大小調整）
-        dynamic_distance = max(MIN_POINT_DISTANCE, int(0.1 * np.sqrt(region.area)))
+    
+    # 优化后的正点采样逻辑
+    selected_positive_points = []
+    for region in regions:
+        # 动态距离阈值（基于区域面积）
+        dynamic_distance = max(15, int(0.08 * np.sqrt(region.area)))
         
-        # 獲取區域代表點（質心或最近點）
+        # 获取区域代表点
         y, x = region.centroid
         x, y = int(round(x)), int(round(y))
         if eroded_mask[y, x] == 0:
@@ -157,16 +159,37 @@ def read_batch_speical(Img, ann_map, visualize_data=False):
         
         current_point = np.array([x, y])
         
-        # 距離檢查（考慮動態閾值）
-        too_close = False
-        for p in selected_points:
-            if np.linalg.norm(current_point - p) < dynamic_distance:
-                too_close = True
-                break
+        # 距离检查
+        too_close = any(np.linalg.norm(current_point - p) < dynamic_distance for p in selected_positive_points)
         if not too_close:
-            selected_points.append(current_point)
+            selected_positive_points.append(current_point)
 
-    points = np.array(selected_points)
+     # 生成负点（背景点）
+    background_coords = np.argwhere(eroded_mask == 0)
+    
+    # 均匀采样策略：先网格采样，不足部分随机补充
+    grid_step = int(np.sqrt(background_coords.shape[0] / N_NEGATIVE_POINTS))
+    grid_points = background_coords[::grid_step, :]
+    
+    # 随机补充剩余点数
+    n_remaining = N_NEGATIVE_POINTS - len(grid_points)
+    if n_remaining > 0:
+        rand_indices = np.random.choice(len(background_coords), n_remaining, replace=False)
+        grid_points = np.vstack([grid_points, background_coords[rand_indices]])
+    
+    # 转换为(x,y)坐标并过滤靠近正点的位置
+    negative_points = []
+    for y, x in grid_points[:N_NEGATIVE_POINTS]:
+        if all(np.linalg.norm([x, y] - p) > MIN_NEGATIVE_DISTANCE for p in selected_positive_points):
+            negative_points.append([x, y])
+    
+    # 组合正负点并创建标签
+    positive_points = np.array(selected_positive_points)
+    negative_points = np.array(negative_points)
+
+    # 组合所有提示点并创建标签数组
+    all_points = np.vstack([positive_points, negative_points])
+    point_labels = np.array([1]*len(positive_points) + [0]*len(negative_points))
 
     if visualize_data:
         plt.figure(figsize=(15, 5))
@@ -189,20 +212,40 @@ def read_batch_speical(Img, ann_map, visualize_data=False):
         plt.imshow(processed_mask, cmap='gray')
         
         colors = list(mcolors.TABLEAU_COLORS.values())
-        for i, point in enumerate(points):
+        for i, point in enumerate(all_points):
             plt.scatter(point[0], point[1], c=colors[i % len(colors)], s=100)
 
         plt.axis('off')
         plt.tight_layout()
         plt.show()
 
+        
+        plt.figure(figsize=(10, 5))
+        plt.imshow(eroded_mask, cmap='gray')
+        
+        # 绘制正点（绿色）和负点（红色）
+        if len(positive_points) > 0:
+            plt.scatter(positive_points[:,0], positive_points[:,1], c='lime', s=50, 
+                       edgecolors='white', linewidths=1, label='Positive Points')
+        if len(negative_points) > 0:
+            plt.scatter(negative_points[:,0], negative_points[:,1], c='red', s=30,
+                       marker='x', linewidths=1, label='Negative Points')
+        
+        plt.legend()
+        plt.title('Positive/Negative Points Visualization')
+        plt.axis('off')
+        plt.show()
+
+
     # 使用处理过的mask作为返回值
     binary_mask = processed_mask.astype(np.uint8)
     binary_mask = np.expand_dims(binary_mask, axis=-1)
     binary_mask = binary_mask.transpose((2, 0, 1))
-    points = np.expand_dims(points, axis=1)
 
-    return Img, binary_mask, points, len(inds)
+    # 调整维度以匹配SAM输入格式
+    all_points = np.expand_dims(all_points, axis=1)  # Shape: (N,1,2)
+
+    return Img, binary_mask, all_points, point_labels, len(inds)
 
 def read_image(image_path, mask_path):  # read and resize image and mask
    img = cv2.imread(image_path)[..., ::-1]  # Convert BGR to RGB
@@ -245,7 +288,7 @@ def main_prediction_process(
 
 
     # Generate random points for the input
-    _, _, input_points, _ = read_batch_speical(image, predicted_mask, True) # predicted_mask ---> org_mask
+    _, _, input_points, input_labels, _ = read_batch_speical(image, predicted_mask, True) # predicted_mask ---> org_mask
     
     if (len(input_points) <= 1):
         return None, None, None, None
