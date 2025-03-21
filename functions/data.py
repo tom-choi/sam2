@@ -321,7 +321,7 @@ class SegmentationDataset(torch.utils.data.Dataset):
         print(f"过滤后保留了 {len(self.all_patches)} 个patch（原有 {len(filtered_indices)} 个）")
     
     def read_image(self, idx):  # read and resize image and mask
-        return self.all_paths[idx], self.all_mask_paths[idx]
+        return self.all_image_paths[idx], self.all_mask_paths[idx]
 
     @staticmethod
     def verify_data_list(data_list: List[Dict[str, str]]) -> bool:
@@ -509,7 +509,7 @@ class SegmentationDataset(torch.utils.data.Dataset):
             print(f"图片索引: {train_in_idx}")  # 打印索引以便验证
             
             # 找到指定图片的所有patches的索引
-            image_indices = [i for i, path in enumerate(self.all_paths) if path == image_path]
+            image_indices = [i for i, path in enumerate(self.all_image_paths) if path == image_path]
             
             if not image_indices:
                 print(f"未找到图片的patches: {image_path}")
@@ -637,7 +637,7 @@ class SegmentationDataset(torch.utils.data.Dataset):
             patches_per_image (int): 每张图片显示的patch数量
         """
         # 获取唯一的图片路径
-        unique_images = list(set(self.all_paths))
+        unique_images = list(set(self.all_image_paths))
         
         # 随机选择图片
         selected_images = random.sample(unique_images, min(num_images, len(unique_images)))
@@ -655,7 +655,7 @@ class SegmentationDataset(torch.utils.data.Dataset):
             patches_per_image: 每个图像要显示的patches数量，默认为5
         """
         # 使用cv2加载图像
-        image_path = self.all_paths[idx]
+        image_path = self.all_image_paths[idx]
         original_image = cv2.imread(image_path)
         if original_image is None:
             print(f"无法读取图片: {image_path}")
@@ -682,7 +682,7 @@ class SegmentationDataset(torch.utils.data.Dataset):
         """
         for i in range(start_idx, min(start_idx + num_samples, len(self))):
             print(f"\nSample {i}:")
-            print(f"Image path: {self.all_paths[i]}")
+            print(f"Image path: {self.all_image_paths[i]}")
             self.visualize_item(i)
 
     def print_dataset_info(self):

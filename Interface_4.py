@@ -38,7 +38,11 @@ OUTPUT_FILES = [
     "with_contours.png",
     "prediction_overlay.png",
     "visualization.png",
-    "histograms.png"
+    "histograms.png",
+    "analysis_1.png",
+    "analysis_2.png",
+    "final_segmentation.png"
+
 ]
 
 def get_unet_models():
@@ -158,17 +162,25 @@ def process_image(input_image, save_dir="test/predictData"):
             alpha=alpha
         )
 
-        # SAM细化处理
-        main_prediction_process(
+        # 执行SAM细化处理
+        sam_results = main_prediction_process(
             sam2_model=model_cache["sam"],
             image=input_image,
-            predicted_mask=pred_mask
+            predicted_mask=pred_mask,
+            save_dir=save_dir
         )
 
         # 加载结果（确保返回7个图像）
         output_images = load_output_images(save_dir)
+
+        # 添加SAM处理结果
+        output_images.update({
+            "analysis_1.png": cv2.imread(sam_results["analysis_1"]),
+            "analysis_2.png": cv2.imread(sam_results["analysis_2"]),
+            "final_segmentation.png": cv2.imread(sam_results["final_seg"])
+        })
         
-        # 验证并确保返回7个有效图像
+        # 验证并确保返回有效图像
         required_outputs = [
             output_images.get("original.png", generate_error_image("original")),
             output_images.get("processed.png", generate_error_image("processed")),
@@ -176,7 +188,10 @@ def process_image(input_image, save_dir="test/predictData"):
             output_images.get("comparison.png", generate_error_image("comparison")),
             output_images.get("overlay.png", generate_error_image("overlay")),
             output_images.get("histograms.png", generate_error_image("histogram")),
-            output_images.get("visualization.png", generate_error_image("visualization"))
+            output_images.get("visualization.png", generate_error_image("visualization")),
+            output_images.get("analysis_1.png"),
+            output_images.get("analysis_2.png"),
+            output_images.get("final_segmentation.png")
         ]
         
         # 转换为numpy数组并验证形状
@@ -197,7 +212,7 @@ def process_image(input_image, save_dir="test/predictData"):
         error_img = np.zeros((512,512,3), dtype=np.uint8)
         cv2.putText(error_img, f"Error: {str(e)}", (10, 256), 
                    cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0,0,255), 2)
-        return [error_img] * 7  # 所有位置显示相同错误
+        return [error_img] * 10  # 所有位置显示相同错误
     
     # finally:
     #     # 清理临时文件（可选）
@@ -274,17 +289,22 @@ with gr.Blocks(title="医学图像分割系统", css=".col {min-height: 300px}")
             gr.Markdown("### 核心结果")
             with gr.Tabs():
                 with gr.TabItem("基础结果"):
-                    original_view = gr.Image(label="原始影像")
-                    processed_view = gr.Image(label="预处理结果")
-                    prediction_view = gr.Image(label="最终预测")
+                    original_view = gr.Image(label="原始影像", height=250)
+                    processed_view = gr.Image(label="预处理结果", height=250)
+                    prediction_view = gr.Image(label="最终预测", height=250)
                 
                 with gr.TabItem("分析视图"):
-                    comparison_view = gr.Image(label="对比视图")
-                    overlay_view = gr.Image(label="叠加视图")
+                    comparison_view = gr.Image(label="对比视图", height=300)
+                    overlay_view = gr.Image(label="叠加视图", height=300)
                 
                 with gr.TabItem("质量分析"):
-                    histogram_view = gr.Image(label="直方图分析")
-                    visualization_view = gr.Image(label="综合可视化")
+                    histogram_view = gr.Image(label="直方图分析", height=300)
+                    visualization_view = gr.Image(label="综合可视化", height=300)
+                
+                with gr.TabItem("SAM细化分析"):
+                    analysis_img1 = gr.Image(label="分割过程分析1", height=250)
+                    analysis_img2 = gr.Image(label="分割过程分析2", height=250)
+                    final_seg_img = gr.Image(label="最终细化结果",  height=250)
 
     # 事件处理
     unet_selector.change(
@@ -309,7 +329,10 @@ with gr.Blocks(title="医学图像分割系统", css=".col {min-height: 300px}")
             comparison_view,
             overlay_view,
             histogram_view,
-            visualization_view
+            visualization_view,
+            analysis_img1,
+            analysis_img2,
+            final_seg_img
         ]
     )
 

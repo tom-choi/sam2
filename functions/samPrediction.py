@@ -104,6 +104,9 @@ MIN_SIZE = 25  # 移除小於此尺寸的白色區域。更大的值會移除更
 SELEM_RADIUS = 4  # 形態學操作中圓形結構元素的半徑。更大的半徑會導致更多的平滑。
 OVERLAP_THRESHOLD = 0.15  # 用於判斷是否保留重疊區域的閾值。更高的值會保留更多的重疊區域。
 
+MIN_POINT_DISTANCE = 20  # 點之間的最小距離閾值
+
+
 def read_batch_speical(Img, ann_map, visualize_data=False):
     # 調整圖像和遮罩大小
     r = min(1334 / Img.shape[1], 1334 / Img.shape[0])  # 縮放因子
@@ -134,24 +137,36 @@ def read_batch_speical(Img, ann_map, visualize_data=False):
     labels = measure.label(eroded_mask)
     regions = measure.regionprops(labels)
 
-    points = []
-    for region in regions:
-        # 使用区域质心作为点位置
-        y, x = region.centroid
-        # 将质心四舍五入到最近的整数坐标
-        x, y = int(round(x)), int(round(y))
+    # 按區域面積降序排序
+    regions_sorted = sorted(regions, key=lambda r: r.area, reverse=True)
+
+    selected_points = []
+    for region in regions_sorted:
+        # 動態距離閾值（根據區域大小調整）
+        dynamic_distance = max(MIN_POINT_DISTANCE, int(0.1 * np.sqrt(region.area)))
         
-        # 确保点在区域内部
+        # 獲取區域代表點（質心或最近點）
+        y, x = region.centroid
+        x, y = int(round(x)), int(round(y))
         if eroded_mask[y, x] == 0:
-            # 如果质心不在区域内，找到最近的区域内点
             coords = region.coords
             distances = np.sqrt((coords[:, 0] - y)**2 + (coords[:, 1] - x)**2)
             nearest_idx = np.argmin(distances)
             y, x = coords[nearest_idx]
+            x, y = int(x), int(y)
         
-        points.append([x, y])
+        current_point = np.array([x, y])
+        
+        # 距離檢查（考慮動態閾值）
+        too_close = False
+        for p in selected_points:
+            if np.linalg.norm(current_point - p) < dynamic_distance:
+                too_close = True
+                break
+        if not too_close:
+            selected_points.append(current_point)
 
-    points = np.array(points)
+    points = np.array(selected_points)
 
     if visualize_data:
         plt.figure(figsize=(15, 5))
