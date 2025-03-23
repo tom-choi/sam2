@@ -107,7 +107,7 @@ OVERLAP_THRESHOLD = 0.15  # 用於判斷是否保留重疊區域的閾值。更�
 MIN_POINT_DISTANCE = 20  # 點之間的最小距離閾值
 
 # 新增参数配置
-N_NEGATIVE_POINTS = 20  # 负点采样数量
+N_NEGATIVE_POINTS = 30  # 负点采样数量
 MIN_NEGATIVE_DISTANCE = 5  # 负点与正点的最小距离
 
 def read_batch_speical(Img, ann_map, visualize_data=False):
@@ -163,33 +163,40 @@ def read_batch_speical(Img, ann_map, visualize_data=False):
         too_close = any(np.linalg.norm(current_point - p) < dynamic_distance for p in selected_positive_points)
         if not too_close:
             selected_positive_points.append(current_point)
+    
+    positive_points = np.array(selected_positive_points)
 
-     # 生成负点（背景点）
+    # 修改后的负点采样逻辑（替换原有负点生成部分）
+    # 生成负点（背景点）
     background_coords = np.argwhere(eroded_mask == 0)
-    
-    # 均匀采样策略：先网格采样，不足部分随机补充
-    grid_step = int(np.sqrt(background_coords.shape[0] / N_NEGATIVE_POINTS))
-    grid_points = background_coords[::grid_step, :]
-    
-    # 随机补充剩余点数
-    n_remaining = N_NEGATIVE_POINTS - len(grid_points)
-    if n_remaining > 0:
-        rand_indices = np.random.choice(len(background_coords), n_remaining, replace=False)
-        grid_points = np.vstack([grid_points, background_coords[rand_indices]])
-    
-    # 转换为(x,y)坐标并过滤靠近正点的位置
     negative_points = []
-    for y, x in grid_points[:N_NEGATIVE_POINTS]:
-        if all(np.linalg.norm([x, y] - p) > MIN_NEGATIVE_DISTANCE for p in selected_positive_points):
-            negative_points.append([x, y])
+    valid_background_coords = []
+
+    # 预筛选满足距离条件的背景点
+    for coord in background_coords:
+        y, x = coord
+        point = np.array([x, y])
+        if all(np.linalg.norm(point - p) >= MIN_NEGATIVE_DISTANCE for p in selected_positive_points):
+            valid_background_coords.append(point)
+
+    # 随机选择有效背景点
+    if len(valid_background_coords) >= N_NEGATIVE_POINTS:
+        selected_indices = np.random.choice(len(valid_background_coords), N_NEGATIVE_POINTS, replace=False)
+        negative_points = [valid_background_coords[i] for i in selected_indices]
+    else:
+        # 如果有效点不足，使用所有有效点+随机补充（允许部分点距离较近）
+        negative_points = valid_background_coords.copy()
+        remaining = N_NEGATIVE_POINTS - len(negative_points)
+        if remaining > 0:
+            rand_indices = np.random.choice(len(background_coords), remaining, replace=False)
+            negative_points += [np.array([background_coords[i][1], background_coords[i][0]]) for i in rand_indices]
+
+    negative_points = np.array(negative_points[:N_NEGATIVE_POINTS])  # 确保不超过指定数量
     
     # 组合正负点并创建标签
-    positive_points = np.array(selected_positive_points)
-    negative_points = np.array(negative_points)
-
     # 组合所有提示点并创建标签数组
     all_points = np.vstack([positive_points, negative_points])
-    point_labels = np.array([1]*len(positive_points) + [0]*len(negative_points))
+    point_labels = np.array([1]*len(positive_points) + [0]*len(negative_points)).reshape(-1, 1)
 
     if visualize_data:
         plt.figure(figsize=(15, 5))
@@ -294,12 +301,17 @@ def main_prediction_process(
         return None, None, None, None
 
     # Perform inference and predict masks
+
+    print(f"输入点坐标维度: {input_points.shape}")  # 应为(N,2)
+    print(f"输入标签维度: {input_labels.shape}")    # sam不能使用這個、为(N,)
+    print(f"输入标签维度: {np.ones([input_points.shape[0], 1]).shape}") # sam可以用這個   
+
     # 用box(整個圖像)的形式輸入prompt
     with torch.no_grad():
         predictor2.set_image(image)
         masks, scores, logits = predictor2.predict(
             point_coords=input_points,
-            point_labels=np.ones([input_points.shape[0], 1])
+            point_labels=input_labels
         )
 
     # Process the predicted masks and sort by scores
