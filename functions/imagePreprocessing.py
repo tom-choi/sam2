@@ -22,6 +22,7 @@ import torch
 import matplotlib   
 import matplotlib.pyplot as plt
 import os
+from skimage import morphology # for denoise
 
 class ImagePreprocessor:
 
@@ -196,7 +197,7 @@ class ImagePreprocessor:
     @staticmethod  # 此方法需要结合前后景识别生成的mask去使用
     def normalize_image(image, mask=None, low_percentile=1, high_percentile=99):
         """
-        改进的归一化处理，考虑有效区域
+        改进的归一化处理，考虑有效区域 
         Args:
             image: 原始图像 (H, W, C)
             mask: 有效区域掩码 (H, W)，None表示全图有效
@@ -205,48 +206,44 @@ class ImagePreprocessor:
         Returns:
             归一化后的图像
         """
-        image = image.astype(np.float32)
+        # 1. 输入验证
+        if not (0 <= low_percentile < high_percentile <= 100):
+            raise ValueError("百分位数范围无效")
+        
+        # 2. 处理单通道图像
+        if len(image.shape) == 2:
+            image = np.expand_dims(image, axis=-1)
+        
+        # 3. 使用float64中间计算提高精度
+        image = image.astype(np.float64)
+        normalized = np.zeros_like(image)
         
         if mask is None:
-            # 如果没有提供mask，使用全图
-            # 改进：使用百分位数而不是简单均值和标准差，以减少异常值影响
-            normalized = np.zeros_like(image, dtype=np.float32)
             for c in range(image.shape[2]):
                 channel = image[..., c]
-                low_val = np.percentile(channel, low_percentile)
-                high_val = np.percentile(channel, high_percentile)
+                low_val, high_val = np.percentile(channel, [low_percentile, high_percentile])
                 
-                # 避免分母为0
-                if high_val > low_val:
-                    normalized[..., c] = np.clip(255 * (channel - low_val) / (high_val - low_val), 0, 255)
-                else:
-                    normalized[..., c] = channel
-            
-            return normalized.astype(np.uint8)
+                # 4. 添加微小值避免除以0
+                scale = max(high_val - low_val, 1e-6)
+                normalized[..., c] = np.clip(255 * (channel - low_val) / scale, 0, 255)
         else:
-            # 只计算有效区域的统计量
+            # 5. 确保mask正确
+            if mask.shape != image.shape[:2]:
+                raise ValueError("mask尺寸与图像不匹配")
             mask = mask.astype(bool)
-            normalized = np.zeros_like(image, dtype=np.float32)
             
             for c in range(image.shape[2]):
                 channel = image[..., c]
                 valid_pixels = channel[mask]
                 
                 if len(valid_pixels) > 0:
-                    # 使用百分位数，而不是均值和标准差
-                    low_val = np.percentile(valid_pixels, low_percentile)
-                    high_val = np.percentile(valid_pixels, high_percentile)
-                    
-                    # 对整个通道应用变换，但统计量只基于mask区域
-                    if high_val > low_val:
-                        normalized[..., c] = np.clip(255 * (channel - low_val) / (high_val - low_val), 0, 255)
-                    else:
-                        normalized[..., c] = channel
+                    low_val, high_val = np.percentile(valid_pixels, [low_percentile, high_percentile])
+                    scale = max(high_val - low_val, 1e-6)
+                    normalized[..., c] = np.clip(255 * (channel - low_val) / scale, 0, 255)
                 else:
                     normalized[..., c] = channel
-            
-            return normalized.astype(np.uint8)
-
+        
+        return normalized.astype(np.uint8)
     ###########
     
     ###########
@@ -358,38 +355,40 @@ class ImagePreprocessor:
         Returns:
             均衡化后的图像
         """
-        # 只转换一次颜色空间
+        # 1. 添加输入验证
+        if image.dtype != np.uint8:
+            raise ValueError("输入图像应为uint8类型")
+        
+        # 2. 处理单通道图像的情况
+        if len(image.shape) == 2:
+            image = cv2.cvtColor(image, cv2.COLOR_GRAY2RGB)
+        
         hsv = cv2.cvtColor(image, cv2.COLOR_RGB2HSV)
-        v_channel = hsv[..., 2]
+        v_channel = hsv[..., 2].copy()  # 3. 使用copy避免修改原数组
         
         if mask is None:
-            # 如果没有提供mask，使用全图
             v_channel = cv2.equalizeHist(v_channel)
         else:
-            # 只对有效区域进行均衡化
+            # 4. 确保mask是二值且与图像尺寸匹配
+            if mask.shape != image.shape[:2]:
+                raise ValueError("mask尺寸与图像不匹配")
             mask = mask.astype(bool)
             
-            # 保存原始有效区域的V通道值
             valid_v = v_channel[mask]
+            if len(valid_v) == 0:
+                return image  # 5. 无有效区域时直接返回
             
-            # 计算直方图
-            hist = cv2.calcHist([valid_v], [0], None, [256], [0, 256])
-            
-            # 计算累积分布函数
+            # 6. 使用更精确的直方图计算方法
+            hist = np.histogram(valid_v, bins=256, range=(0, 256))[0]
             cdf = hist.cumsum()
+            cdf_normalized = (cdf - cdf.min()) * 255 / (cdf.max() - cdf.min() + 1e-6)
             
-            # 避免除以0的情况，确保cdfs[-1]不为0
-            cdf_normalized = cdf * 255 / (cdf[-1] if cdf[-1] != 0 else 1)
-            
-            # 应用均衡化，直接在原数组上进行操作
-            v_channel[mask] = np.interp(valid_v, np.arange(256), cdf_normalized)
+            # 7. 使用查找表提高效率
+            lut = np.interp(np.arange(256), np.arange(256), cdf_normalized).astype(np.uint8)
+            v_channel[mask] = lut[valid_v]
         
-        # 最后一次颜色空间转换
         hsv[..., 2] = v_channel
-        image = cv2.cvtColor(hsv, cv2.COLOR_HSV2RGB)
-        
-        return image.astype(np.uint8)
-    
+        return cv2.cvtColor(hsv, cv2.COLOR_HSV2RGB)
     ###########
    
    
@@ -545,6 +544,97 @@ class ImagePreprocessor:
         img = cv2.resize(img, size)
         return img
     
+####### Post-Processing part  后处理部分
+
+
+    #####  新的高级形态学去噪函数（基于连通域分析）  #######
+
+    @staticmethod
+    def advanced_denoise(
+        input_image,                    # 输入图像变量
+        binary_threshold=128,           # 二值化阈值（0-255）
+        min_noise_size=50,              # 最小噪声面积（小于此值的白色区域会被移除）
+        max_hole_size=100,              # 最大孔洞面积（小于此值的黑色孔洞会被填充）
+        opening_radius=2,               # 开操作结构元半径（控制边缘平滑度）
+        closing_radius=None,            # 闭操作结构元半径（可选，用于连接断裂区域）
+        invert_input=False,             # 是否反转输入图像（黑/白反转）
+        invert_output=False             # 是否反转输出图像
+    ):
+        """
+        高级形态学去噪函数（基于连通域分析）
+        
+        参数说明：
+        1. input_image: 输入图像变量（灰度或彩色图像）
+        2. binary_threshold: 二值化阈值（高于此值为白色，低于为黑色）
+        3. min_noise_size: 最小噪声面积（像素数），小于此值的孤立白点会被移除
+        4. max_hole_size: 最大孔洞面积（像素数），小于此值的黑色孔洞会被填充
+        5. opening_radius: 开操作结构元的圆盘半径（消除毛刺）
+        6. closing_radius: 闭操作结构元的圆盘半径（可选，连接断裂区域）
+        7. invert_input: 输入图像是否黑白反转（True表示黑底白字）
+        8. invert_output: 输出图像是否黑白反转
+        
+        返回：
+        处理后的二值图像
+        """
+        # 确保输入图像为灰度图
+        if len(input_image.shape) > 2:
+            img = cv2.cvtColor(input_image, cv2.COLOR_BGR2GRAY)
+        else:
+            img = input_image.copy()
+        
+        # 二值化
+        _, binary = cv2.threshold(img, binary_threshold, 255, cv2.THRESH_BINARY)
+        
+        # 可选：反转图像（例如黑底白字的情况）
+        if invert_input:
+            binary = 255 - binary
+        
+        # 转换为布尔矩阵（True=白色，False=黑色）
+        binary_bool = binary.astype(bool)
+        
+        # 第二步：填充小孔洞（黑色噪点）
+        cleaned = morphology.remove_small_holes(binary_bool, area_threshold=max_hole_size)
+        
+        # 第一步：移除小面积噪声（白色噪点）
+        filled = morphology.remove_small_objects(cleaned, min_size=min_noise_size)
+        
+        # 第三步：开操作（平滑边缘）
+        if opening_radius > 0:
+            smoothed = morphology.opening(filled, morphology.disk(opening_radius))
+        else:
+            smoothed = filled
+        
+        # 可选：闭操作（连接断裂区域）
+        if closing_radius and closing_radius > 0:
+            smoothed = morphology.closing(smoothed, morphology.disk(closing_radius))
+        
+        # 恢复为0-255图像
+        result = smoothed.astype(np.uint8) * 255
+        
+        # 可选：反转输出
+        if invert_output:
+            result = 255 - result
+        
+        # 返回结果图像
+        return result
+
+    # 示例调用
+    # img = cv2.imread('input.jpg')
+    # result = advanced_denoise(
+    #     input_image=image1,
+    #     binary_threshold=128,    # 根据图像调整
+    #     min_noise_size=50,       # 小于50像素的噪点被移除
+    #     max_hole_size=100,       # 小于100像素的孔洞被填充
+    #     opening_radius=2,        # 边缘平滑强度
+    #     closing_radius=3         # 连接断裂区域（设为None则禁用）
+    #     closing_radius=None,          # 闭操作结构元半径（可选，用于连接断裂区域）
+    #     invert_input=False,           # 是否反转输入图像（黑/白反转）
+    #     invert_output=False          # 是否反转输出图像
+    # )  
+    # cv2.imwrite('output.jpg', result)
+    
+    
+#######################
     
     def show_image(self, image, title="Image"):
         """
@@ -576,6 +666,7 @@ class ImagePreprocessor:
         
         # 1. 归一化处理 (屏蔽黑色背景)
         image = self.normalize_image(image, mask_background)
+        
         # 2. 直方图均衡化 (屏蔽黑色背景) 
         image = self.histogram_equalization(image, mask_background)
         # 3. 亮度调整
@@ -591,6 +682,10 @@ class ImagePreprocessor:
         
         return image, mask
     
+
+
+
+
 
 
     # 测试单张图片的流程，用于自行查看process的效果
