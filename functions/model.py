@@ -1,3 +1,4 @@
+import gc
 import os
 from matplotlib import pyplot as plt
 import torch
@@ -286,6 +287,39 @@ def load_model(model_path, device="cuda", model_type = "UNET"):
     
     return model
 
+def load_model(model_path, device="cuda"):
+    """
+    加载保存的模型
+    
+    参数:
+        model_path: 模型文件路径
+        device: 使用的设备，默认为cuda
+    
+    返回:
+        model: 加载的模型
+    """
+    # 检查设备
+    if device == "cuda" and not torch.cuda.is_available():
+        print("CUDA不可用，将使用CPU")
+        device = "cpu"
+    
+    # 初始化模型架构
+    model = UNet(num_classes=1)
+    
+    # 加载模型权重
+    model.load_state_dict(torch.load(model_path, map_location=device, weights_only=True))
+    
+    # 将模型转移到指定设备
+    model = model.to(device)
+    
+    # 设置为评估模式
+    model.eval()
+    
+    print(f"模型已从 {model_path} 加载")
+    
+    return model
+
+
 def save_model(model, model_path):
     torch.save(model.state_dict(), model_path)
 
@@ -305,8 +339,21 @@ def calculate_metrics(pred_mask, true_mask, threshold=0.5):
 
     return iou.item(), dice.item()
 
+
 def reconstruct_from_patches(patches, positions, original_size, patch_size, stride):
-    """从patches重建完整图像"""
+    """
+    从patches重建完整图像
+    
+    参数:
+        patches: 预测的patch列表
+        positions: 每个patch的左上角坐标列表，格式为[(y1, x1), (y2, x2), ...]
+        original_size: 原始图像尺寸，格式为(height, width)
+        patch_size: patch的大小
+        stride: patch滑动的步长
+
+    返回:
+        reconstructed: 重建后的完整图像
+    """
     h, w = original_size
     reconstructed = np.zeros((h, w), dtype=np.float32)
     count = np.zeros((h, w), dtype=np.float32)
@@ -399,23 +446,160 @@ def train_model(model, train_loader, val_loader, num_epochs=50, device="cuda"):
             best_val_loss = val_loss
             save_model(model, 'best_model_loss.pth')
 
-def predict(model, image_path, device="cuda", PATCH_SIZE = 64):
-    model.eval()
+def optimized_train_model(model, train_loader, val_loader, num_epochs=50, device="cuda", 
+                          batch_accumulation=1, pin_memory=True):
     
-    # 加载图像，保持原始尺寸
-    image = cv2.imread(image_path)
-    image = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
+    optimizer = Adam(model.parameters(), lr=1e-4)
+    scheduler = ReduceLROnPlateau(optimizer, mode='min', patience=5, factor=0.5)
+    criterion = nn.BCEWithLogitsLoss()
     
-    # 获取原始图像尺寸
+    best_val_iou = 0
+    best_val_loss = float('inf')
+    
+    # 设置异步数据加载
+    train_loader.pin_memory = pin_memory
+    val_loader.pin_memory = pin_memory
+    
+    # 初始清理内存
+    if device == "cuda":
+        torch.cuda.empty_cache()
+        gc.collect()
+    
+    for epoch in range(num_epochs):
+        # 训练阶段
+        model.train()
+        train_loss = 0
+        train_iou = 0
+        train_dice = 0
+        batch_count = 0
+        
+        optimizer.zero_grad()  # 外部清零梯度
+        
+        for batch_idx, batch in enumerate(train_loader):
+            # 使用梯度累积减少GPU内存使用
+            patches = batch['patches'].to(device, non_blocking=True)
+            mask_patches = batch['mask_patches'].to(device, non_blocking=True)
+            
+            outputs = model(patches)
+            loss = criterion(outputs, mask_patches) / batch_accumulation
+            
+            loss.backward()
+            
+            # 梯度累积：每累积batch_accumulation个批次更新一次权重
+            if (batch_idx + 1) % batch_accumulation == 0:
+                optimizer.step()
+                optimizer.zero_grad()
+            
+            pred_masks = (torch.sigmoid(outputs) > 0.5).float()
+            iou, dice = calculate_metrics(pred_masks, mask_patches)
+            
+            train_loss += loss.item() * batch_accumulation
+            train_iou += iou
+            train_dice += dice
+            batch_count += 1
+            
+            # 在内部也进行内存清理
+            del patches, mask_patches, outputs, pred_masks, loss
+            
+            # 定期清理GPU内存
+            if batch_idx % 10 == 0 and device == "cuda":
+                torch.cuda.empty_cache()
+        
+        # 处理剩余的梯度
+        if batch_count % batch_accumulation != 0:
+            optimizer.step()
+            optimizer.zero_grad()
+        
+        # 计算平均值
+        train_loss /= batch_count
+        train_iou /= batch_count
+        train_dice /= batch_count
+        
+        # 训练完成后清理内存
+        if device == "cuda":
+            torch.cuda.empty_cache()
+            gc.collect()
+        
+        # 验证阶段
+        model.eval()
+        val_loss = 0
+        val_iou = 0
+        val_dice = 0
+        val_count = 0
+        
+        with torch.no_grad():
+            for batch in val_loader:
+                patches = batch['patches'].to(device, non_blocking=True)
+                mask_patches = batch['mask_patches'].to(device, non_blocking=True)
+                
+                outputs = model(patches)
+                loss = criterion(outputs, mask_patches)
+                
+                pred_masks = (torch.sigmoid(outputs) > 0.5).float()
+                iou, dice = calculate_metrics(pred_masks, mask_patches)
+                
+                val_loss += loss.item()
+                val_iou += iou
+                val_dice += dice
+                val_count += 1
+                
+                del patches, mask_patches, outputs, pred_masks, loss
+        
+        val_loss /= val_count
+        val_iou /= val_count
+        val_dice /= val_count
+        
+        # 验证完成后清理内存
+        if device == "cuda":
+            torch.cuda.empty_cache()
+            gc.collect()
+        
+        # 更新学习率
+        scheduler.step(val_loss)
+        
+        # 简洁输出格式
+        print(f'Epoch {epoch+1}/{num_epochs}:')
+        print(f'Training - Loss: {train_loss:.4f}, IoU: {train_iou:.4f}, Dice: {train_dice:.4f}')
+        print(f'Validation - Loss: {val_loss:.4f}, IoU: {val_iou:.4f}, Dice: {val_dice:.4f}')
+        print('------------------------------------------------------------')
+        
+        if val_iou > best_val_iou:
+            best_val_iou = val_iou
+            torch.save(model.state_dict(), 'models/UnetTrain/best_model_iou.pth')
+        
+        if val_loss < best_val_loss:
+            best_val_loss = val_loss
+            torch.save(model.state_dict(), 'models/UnetTrain/best_model_loss.pth')   
+   
+def predict(model, image, mask=None, device="cuda", patch_size=256, stride=None):
+    """
+    核心预测函数：接收预处理后的图像，执行模型预测，返回预测结果和评估指标
+    
+    参数:
+        model: 训练好的模型
+        image: 预处理后的图像数组（RGB格式），已确保尺寸适合patch提取
+        mask: 预处理后的真实掩码数组（可选，用于计算评估指标）
+        device: 使用的设备，默认为cuda
+        patch_size: 处理的patch大小
+        stride: patch滑动的步长，None则默认为patch_size//2
+    
+    返回:
+        pred_mask: 预测的分割掩码
+        metrics: 评估指标（若提供真实掩码）
+    """
+    # 设置默认stride
+    if stride is None:
+        stride = patch_size // 2
+    
+    # 获取图像尺寸
     h, w = image.shape[:2]
     
-    # Patch参数
-    patch_size = PATCH_SIZE
-    overlap = patch_size // 2  # 50% 重叠
+    # 执行预测
+    model.eval()
     
     # 计算步数
-    h_steps = int(np.ceil((h - patch_size) / (patch_size - overlap))) + 1
-    w_steps = int(np.ceil((w - patch_size) / (patch_size - overlap))) + 1
+    h_steps = max(1, (h - patch_size + stride) // stride)
+    w_steps = max(1, (w - patch_size + stride) // stride)
     
     patches_list = []
     patch_positions = []
@@ -424,87 +608,467 @@ def predict(model, image_path, device="cuda", PATCH_SIZE = 64):
     for i in range(h_steps):
         for j in range(w_steps):
             # 计算patch坐标
-            y_start = min(i * (patch_size - overlap), h - patch_size)
-            x_start = min(j * (patch_size - overlap), w - patch_size)
+            y_start = min(i * stride, h - patch_size)
+            x_start = min(j * stride, w - patch_size)
             
             # 提取patch
             patch = image[y_start:y_start+patch_size, x_start:x_start+patch_size]
             
+            # 处理可能的边界情况，确保patch尺寸正确
+            if patch.shape[0] < patch_size or patch.shape[1] < patch_size:
+                temp_patch = np.zeros((patch_size, patch_size, 3), dtype=patch.dtype)
+                temp_patch[:patch.shape[0], :patch.shape[1]] = patch
+                patch = temp_patch
+            
             # 标准化和通道顺序转换
-            patch = patch / 255.0
-            patch = patch.transpose(2, 0, 1)
-            patches_list.append(patch)
+            normalized_patch = patch.astype(np.float32) / 255.0
+            normalized_patch = normalized_patch.transpose(2, 0, 1)
+            patches_list.append(normalized_patch)
             patch_positions.append((y_start, x_start))
     
     # 转换为tensor
     patches_array = np.stack(patches_list)
     patches_tensor = torch.from_numpy(patches_array).float().to(device)
     
-    # 运行推理
-    with torch.no_grad():
-        outputs = model(patches_tensor)
-        pred_masks = torch.sigmoid(outputs) > 0.5
+    # 分批处理以避免内存不足
+    batch_size = 16  # 可以根据可用GPU内存调整
+    all_pred_patches = []
     
-    # 初始化权重和预测图
-    weight_map = np.zeros((h, w))
-    pred_map = np.zeros((h, w))
+    for i in range(0, len(patches_tensor), batch_size):
+        batch = patches_tensor[i:i+batch_size]
+        with torch.no_grad():
+            outputs = model(batch)
+            pred_masks = (torch.sigmoid(outputs) > 0.5).float()
+            all_pred_patches.extend([p[0].cpu().numpy() for p in pred_masks])
     
-    # 创建权重核用于混合
-    y, x = np.mgrid[0:patch_size, 0:patch_size]
-    weight_kernel = np.exp(-((x - patch_size/2)**2 + (y - patch_size/2)**2) / (2*(patch_size/4)**2))
+    # 重建完整的预测掩码
+    prediction = reconstruct_from_patches(
+        all_pred_patches, 
+        patch_positions, 
+        (h, w), 
+        patch_size, 
+        stride
+    )
     
-    # 使用加权平均重建完整掩码
-    for idx, (y_start, x_start) in enumerate(patch_positions):
-        mask_patch = pred_masks[idx, 0].cpu().numpy()
+    # 二值化
+    prediction = (prediction > 0.5).astype(np.float32)
+    
+    # 计算评估指标（如果提供了真实掩码）
+    metrics = None
+    if mask is not None:
+        # 确保掩码格式正确
+        # 假设255是前景，0和2是背景
+        mask_float = (mask == 255).astype(np.float32)
+            
+        # 转换为tensor计算IoU和Dice
+        pred_tensor = torch.from_numpy(prediction)
+        true_tensor = torch.from_numpy((mask_float > 0.5).astype(np.float32))
         
-        # 应用权重核
-        weighted_patch = mask_patch * weight_kernel
+        # 确保尺寸一致
+        if pred_tensor.shape != true_tensor.shape:
+            print(f"警告: 预测掩码 ({pred_tensor.shape}) 和真实掩码 ({true_tensor.shape}) 尺寸不一致")
+            # 使用最近邻插值调整大小
+            pred_tensor = torch.nn.functional.interpolate(
+                pred_tensor.unsqueeze(0).unsqueeze(0), 
+                size=true_tensor.shape, 
+                mode='nearest'
+            ).squeeze(0).squeeze(0)
         
-        # 添加到预测和权重图
-        y_end = min(y_start + patch_size, h)
-        x_end = min(x_start + patch_size, w)
-        patch_h = y_end - y_start
-        patch_w = x_end - x_start
+        # 计算评估指标
+        iou, dice = calculate_metrics(pred_tensor, true_tensor)
+        metrics = {"IoU": iou, "Dice": dice}
         
-        pred_map[y_start:y_end, x_start:x_end] += weighted_patch[:patch_h, :patch_w]
-        weight_map[y_start:y_end, x_start:x_end] += weight_kernel[:patch_h, :patch_w]
+        print(f"评估指标: IoU={iou:.4f}, Dice={dice:.4f}")
     
-    # 权重归一化
-    full_mask = np.divide(pred_map, weight_map, where=weight_map > 0)
-    full_mask = (full_mask > 0.5).astype(np.float32)
-    
-    return full_mask
+    return prediction, metrics
 
-# 优化后预测函数 2025.3.5 --18:21
-def reconstruct_from_patches(patches, positions, original_size, patch_size, stride):
+#### new testing part (2025.4.7)
+def visualize_results(original_img, preprocessed_img, true_mask, pred_mask, metrics, file_name, save_dir, padding_info=None):
     """
-    从patches重建完整图像
+    创建和保存可视化结果
     
     参数:
-        patches: 预测的patch列表
-        positions: 每个patch的左上角坐标列表，格式为[(y1, x1), (y2, x2), ...]
-        original_size: 原始图像尺寸，格式为(height, width)
-        patch_size: patch的大小
-        stride: patch滑动的步长
-        
-    返回:
-        reconstructed: 重建后的完整图像
+        original_img: 原始图像
+        preprocessed_img: 预处理后的图像
+        true_mask: 真实掩码
+        pred_mask: 预测掩码
+        metrics: 评估指标
+        file_name: 文件名前缀
+        save_dir: 保存目录
+        padding_info: 填充信息字典
     """
-    h, w = original_size
-    reconstructed = np.zeros((h, w), dtype=np.float32)
-    count = np.zeros((h, w), dtype=np.float32)
+    # 转换预处理图像为BGR（用于保存）
+    if len(preprocessed_img.shape) == 3 and preprocessed_img.shape[2] == 3:
+        preprocessed_img_bgr = cv2.cvtColor(preprocessed_img, cv2.COLOR_RGB2BGR)
+    else:
+        preprocessed_img_bgr = preprocessed_img
     
-    for patch, (y, x) in zip(patches, positions):
-        patch_h = min(patch_size, h - y)
-        patch_w = min(patch_size, w - x)
-        reconstructed[y:y+patch_h, x:x+patch_w] += patch[:patch_h, :patch_w]
-        count[y:y+patch_h, x:x+patch_w] += 1
+    # 创建轮廓图
+    orig_with_contours = original_img.copy()
+    contours, _ = cv2.findContours(pred_mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+    cv2.drawContours(orig_with_contours, contours, -1, (0, 255, 0), 2)
+    cv2.imwrite(os.path.join(save_dir, f"{file_name}_with_contours.png"), orig_with_contours)
     
-    # 处理重叠区域
-    count[count == 0] = 1
-    reconstructed /= count
-    return reconstructed
-# 优化后预测函数 2025.3.5 --18:21
+    # 创建叠加图
+    pred_mask_color = cv2.cvtColor(pred_mask, cv2.COLOR_GRAY2BGR)
+    pred_mask_color[pred_mask > 0] = [0, 255, 0]  # 绿色
+    alpha_overlay = 0.3
+    overlay = cv2.addWeighted(original_img, 1, pred_mask_color, alpha_overlay, 0)
+    cv2.imwrite(os.path.join(save_dir, f"{file_name}_overlay.png"), overlay)
+    
+    # 如果有真实掩码，创建对比图
+    if true_mask is not None:
+        # 创建彩色对比掩码
+        color_mask = np.zeros((original_img.shape[0], original_img.shape[1], 3), dtype=np.uint8)
+        
+        # 调整大小以匹配
+        if true_mask.shape != pred_mask.shape:
+            resized_pred = cv2.resize(
+                pred_mask, 
+                (true_mask.shape[1], true_mask.shape[0]), 
+                interpolation=cv2.INTER_NEAREST
+            )
+        else:
+            resized_pred = pred_mask
+        
+        true_mask_bin = true_mask > 0
+        pred_mask_bin = resized_pred > 0
+        
+        # 正确检测 (绿色)
+        color_mask[np.logical_and(true_mask_bin, pred_mask_bin)] = [0, 255, 0]
+        
+        # 错误检测 (红色)
+        color_mask[np.logical_and(np.logical_not(true_mask_bin), pred_mask_bin)] = [0, 0, 255]
+        
+        # 漏检 (蓝色)
+        color_mask[np.logical_and(true_mask_bin, np.logical_not(pred_mask_bin))] = [255, 0, 0]
+        
+        cv2.imwrite(os.path.join(save_dir, f"{file_name}_color_mask.png"), color_mask)
+        
+        # 叠加到原始图像
+        comparison_overlay = cv2.addWeighted(original_img, 1, color_mask, 0.5, 0)
+        cv2.imwrite(os.path.join(save_dir, f"{file_name}_comparison.png"), comparison_overlay)
+    
+    # 创建matplotlib可视化
+    plt.figure(figsize=(15, 10))
+    
+    # 原始图像
+    plt.subplot(231)
+    plt.imshow(cv2.cvtColor(original_img, cv2.COLOR_BGR2RGB))
+    plt.title('Original Image')
+    plt.axis('off')
+    
+    # 预处理图像（如果有填充信息，显示填充边界）
+    plt.subplot(232)
+    if len(preprocessed_img.shape) == 3:
+        plt.imshow(preprocessed_img)
+    else:
+        plt.imshow(preprocessed_img, cmap='gray')
+    
+    # 如果有填充信息，在预处理图像上绘制填充边界
+    if padding_info:
+        h, w = padding_info["original_size"]
+        top, left = padding_info["top"], padding_info["left"]
+        
+        # 绘制填充边界的矩形
+        rect = plt.Rectangle(
+            (left, top), 
+            w, h, 
+            linewidth=2, 
+            edgecolor='r', 
+            facecolor='none'
+        )
+        plt.gca().add_patch(rect)
+        plt.title(f'Preprocessed Image with Padding\n(red rectangle: original image boundaries)')
+    else:
+        plt.title('Preprocessed Image')
+    plt.axis('off')
+    
+    # 预测掩码
+    plt.subplot(233)
+    plt.imshow(pred_mask, cmap='gray')
+    plt.title('Prediction Mask')
+    plt.axis('off')
+    
+    # 如果有真实掩码
+    if true_mask is not None:
+        plt.subplot(234)
+        plt.imshow(true_mask, cmap='gray')
+        plt.title('Ground Truth Mask')
+        plt.axis('off')
+        
+        plt.subplot(235)
+        plt.imshow(cv2.cvtColor(comparison_overlay, cv2.COLOR_BGR2RGB))
+        plt.title(f'Comparison\nIoU: {metrics["IoU"]:.4f}, Dice: {metrics["Dice"]:.4f}')
+        plt.axis('off')
+    
+    plt.subplot(236)
+    plt.imshow(cv2.cvtColor(overlay, cv2.COLOR_BGR2RGB))
+    plt.title('Prediction Overlay')
+    plt.axis('off')
+    
+    plt.tight_layout()
+    plt.savefig(os.path.join(save_dir, f"{file_name}_visualization.png"), dpi=300, bbox_inches='tight')
+    plt.close()
+    
+    # 创建直方图比较
+    plt.figure(figsize=(12, 6))
+    
+    # 原始图像直方图
+    plt.subplot(121)
+    if len(original_img.shape) == 3:
+        orig_gray = cv2.cvtColor(original_img, cv2.COLOR_BGR2GRAY)
+    else:
+        orig_gray = original_img
+    plt.hist(orig_gray.ravel(), 256, [0, 256])
+    plt.title('Original Image Histogram')
+    plt.xlabel('Pixel Value')
+    plt.ylabel('Frequency')
+    
+    # 预处理后图像直方图
+    plt.subplot(122)
+    if len(preprocessed_img.shape) == 3:
+        preproc_gray = cv2.cvtColor(preprocessed_img, cv2.COLOR_RGB2GRAY)
+    else:
+        preproc_gray = preprocessed_img
+    plt.hist(preproc_gray.ravel(), 256, [0, 256])
+    plt.title('Preprocessed Image Histogram')
+    plt.xlabel('Pixel Value')
+    plt.ylabel('Frequency')
+    
+    plt.tight_layout()
+    plt.savefig(os.path.join(save_dir, f"{file_name}_histograms.png"), dpi=300, bbox_inches='tight')
+    plt.close()
+
+def segmentation_pipeline(model_path, image_path, mask_path=None, save_dir="test/predictData", 
+                          patch_size=256, stride=None, value=0, alpha=1.0, device=None):
+    """
+    完整的分割流程：加载模型、预处理、预测、后处理和可视化
+    
+    参数:
+        model_path: 模型文件路径
+        image_path: 图像路径
+        mask_path: 掩码路径，可选
+        save_dir: 保存结果的目录
+        patch_size: 处理的patch大小
+        stride: patch滑动的步长
+        value: 亮度调整值
+        alpha: 对比度调整系数
+        device: 使用的设备，None则自动选择
+    
+    返回:
+        post_processed_mask: 后处理后的掩码
+        metrics: 评估指标（若提供真实掩码）
+    """
+    # 设置设备
+    if device is None:
+        device = "cuda" if torch.cuda.is_available() else "cpu"
+    
+    # 设置默认stride
+    if stride is None:
+        stride = patch_size // 2
+    
+    # 确保保存目录存在
+    os.makedirs(save_dir, exist_ok=True)
+    
+    # 获取文件名（不含扩展名）作为保存前缀
+    file_name = os.path.splitext(os.path.basename(image_path))[0]
+    
+    print(f"处理图像: {file_name}")
+    print(f"使用设备: {device}")
+    print(f"模型路径: {model_path}")
+    
+    # 1. 加载模型
+    model = load_model(model_path, device)
+    
+    # 2. 读取图像和掩码
+    # 读取原始图像
+    original_img = cv2.imread(image_path)
+    original_img_rgb = cv2.cvtColor(original_img, cv2.COLOR_BGR2RGB)
+    original_h, original_w = original_img.shape[:2]
+    
+    # 读取真实掩码（如果有）
+    true_mask = None
+    if mask_path and os.path.exists(mask_path):
+        true_mask = cv2.imread(mask_path, cv2.IMREAD_GRAYSCALE)
+        # 保存引用到原始真实掩码，用于最终评估
+        original_true_mask = true_mask.copy()
+    
+    # 保存原始图像
+    cv2.imwrite(os.path.join(save_dir, f"{file_name}_original.png"), original_img)
+    
+    # 如果有真实掩码，保存它
+    if true_mask is not None:
+        cv2.imwrite(os.path.join(save_dir, f"{file_name}_true_mask.png"), true_mask)
+    
+    # 3. 预处理
+    # 确保图像尺寸能被patch_size整除，必要时进行填充
+    # 计算需要填充的尺寸
+    # 先计算padding_info
+    padding_info = ImagePreprocessor.calculate_padding_info(original_h, original_w, patch_size)
+
+    # 从padding_info中提取填充值
+    top_pad = padding_info["top"]
+    bottom_pad = padding_info["bottom"]
+    left_pad = padding_info["left"]
+    right_pad = padding_info["right"]
+    
+    
+    # 初始化预处理器
+    preprocessor = ImagePreprocessor()
+    
+    # 应用预处理（包含亮度对比度调整和填充）
+    preprocessed_img, preprocessed_mask = preprocessor.preprocess(
+        original_img_rgb, 
+        true_mask, 
+        patch_size=patch_size,
+        padding=(top_pad, bottom_pad, left_pad, right_pad),  # 传入填充信息
+        value=value, 
+        alpha=alpha
+    )
+    
+    # 保存预处理后的图像
+    preprocessed_img_bgr = cv2.cvtColor(preprocessed_img, cv2.COLOR_RGB2BGR)
+    cv2.imwrite(os.path.join(save_dir, f"{file_name}_preprocessed.png"), preprocessed_img_bgr)
+    
+    # 如果有预处理后的掩码，保存它
+    if preprocessed_mask is not None:
+        cv2.imwrite(os.path.join(save_dir, f"{file_name}_preprocessed_mask.png"), 
+                   (preprocessed_mask ).astype(np.uint8))
+    
+    # 输出预处理前后的尺寸变化
+    print(f"原始图像尺寸: {original_h}x{original_w}")
+    print(f"预处理后图像尺寸: {preprocessed_img.shape[0]}x{preprocessed_img.shape[1]}")
+    print(f"填充信息: 上={top_pad}, 下={bottom_pad}, 左={left_pad}, 右={right_pad}")
+    
+    # 4. 执行模型预测
+    pred_mask, raw_metrics = predict(
+        model=model,
+        image=preprocessed_img,
+        mask=preprocessed_mask,
+        device=device,
+        patch_size=patch_size,
+        stride=stride
+    )
+    
+    # 保存原始预测结果
+    cv2.imwrite(os.path.join(save_dir, f"{file_name}_prediction_raw.png"), 
+               (pred_mask * 255).astype(np.uint8))
+    
+    # 5. 裁剪回原始尺寸
+    # 计算裁剪区域
+    h_start = top_pad
+    w_start = left_pad
+    h_end = preprocessed_img.shape[0] - bottom_pad
+    w_end = preprocessed_img.shape[1] - right_pad
+    
+    # 确保不会越界
+    h_start = max(0, h_start)
+    w_start = max(0, w_start)
+    h_end = min(preprocessed_img.shape[0], h_end)
+    w_end = min(preprocessed_img.shape[1], w_end)
+    
+    # 裁剪预测掩码回原始尺寸
+    pred_mask_original_size = pred_mask[h_start:h_end, w_start:w_end]
+    
+    # 确保预测掩码与原始图像尺寸完全匹配
+    if pred_mask_original_size.shape[:2] != (original_h, original_w):
+        print(f"警告: 裁剪后的预测掩码 ({pred_mask_original_size.shape[:2]}) 与原始图像 ({original_h}, {original_w}) 尺寸不完全匹配，正在调整...")
+        pred_mask_original_size = cv2.resize(
+            pred_mask_original_size, 
+            (original_w, original_h), 
+            interpolation=cv2.INTER_NEAREST
+        )
+    
+    # 保存裁剪后的预测结果
+    cv2.imwrite(os.path.join(save_dir, f"{file_name}_prediction_original_size.png"), 
+               (pred_mask_original_size * 255).astype(np.uint8))
+    
+    # 6. 后处理:降噪
+    post_processed_mask = ImagePreprocessor.advanced_denoise(
+        input_image=pred_mask_original_size,  # 已经是0-1范围的浮点数
+        binary_threshold=0.5,
+        min_noise_size=30,
+        max_hole_size=200,
+        opening_radius=5,
+        closing_radius=3
+    )
+
+    # 保存后处理的掩码（转换为0-255范围保存图像）
+    cv2.imwrite(os.path.join(save_dir, f"{file_name}_prediction_final.png"), 
+            (post_processed_mask * 255).astype(np.uint8))
+    
+    # 7. 计算后处理后的评估指标
+    final_metrics = None
+    if true_mask is not None:
+        # 确保掩码尺寸完全匹配
+        if post_processed_mask.shape != original_true_mask.shape:
+            print(f"警告: 后处理掩码 ({post_processed_mask.shape}) 与原始真实掩码 ({original_true_mask.shape}) 尺寸不一致，正在调整...")
+            # 调整大小以匹配原始真实掩码
+            post_processed_mask_resized = cv2.resize(
+                post_processed_mask, 
+                (original_true_mask.shape[1], original_true_mask.shape[0]), 
+                interpolation=cv2.INTER_NEAREST
+            )
+        else:
+            post_processed_mask_resized = post_processed_mask
+        
+        # 转换掩码格式为浮点型 (同predict函数中的处理方式)
+        if original_true_mask.dtype != np.float32:
+            if original_true_mask.dtype == np.uint8:
+                # 关键修改：使用"== 255"而不是"> 0"进行二值化
+                true_mask_float = (original_true_mask == 255).astype(np.float32)
+            else:
+                true_mask_float = original_true_mask.astype(np.float32)
+        else:
+            true_mask_float = original_true_mask
+        
+        # 将后处理掩码转换为浮点型
+        post_processed_float = (post_processed_mask_resized > 0).astype(np.float32)
+        
+        # 转换为tensor计算IoU和Dice (与predict函数相同)
+        pred_tensor = torch.from_numpy(post_processed_float)
+        true_tensor = torch.from_numpy((true_mask_float > 0.5).astype(np.float32))
+        
+        # 计算评估指标
+        iou, dice = calculate_metrics(pred_tensor, true_tensor)
+        final_metrics = {"IoU": iou, "Dice": dice}
+        
+        # 将指标写入文件
+        with open(os.path.join(save_dir, f"{file_name}_metrics.txt"), 'w') as f:
+            if raw_metrics:
+                f.write(f"原始预测: IoU={raw_metrics['IoU']:.4f}, Dice={raw_metrics['Dice']:.4f}\n")
+            f.write(f"后处理后: IoU={iou:.4f}, Dice={dice:.4f}\n")
+        
+        # 打印原始和后处理的评估指标比较
+        if raw_metrics:
+            print(f"原始预测指标: IoU={raw_metrics['IoU']:.4f}, Dice={raw_metrics['Dice']:.4f}")
+        print(f"后处理后指标: IoU={iou:.4f}, Dice={dice:.4f}")
+        
+        # 计算改善百分比
+        if raw_metrics:
+            iou_improvement = (iou - raw_metrics['IoU']) / raw_metrics['IoU'] * 100 if raw_metrics['IoU'] > 0 else float('inf')
+            dice_improvement = (dice - raw_metrics['Dice']) / raw_metrics['Dice'] * 100 if raw_metrics['Dice'] > 0 else float('inf')
+            print(f"指标改善: IoU: {iou_improvement:.2f}%, Dice: {dice_improvement:.2f}%")
+            
+    # 8. 创建可视化结果
+    visualize_results(
+        original_img=original_img,
+        preprocessed_img=preprocessed_img,
+        true_mask=original_true_mask if true_mask is not None else None,
+        pred_mask=post_processed_mask,
+        metrics=final_metrics,
+        file_name=file_name,
+        save_dir=save_dir,
+        padding_info=padding_info
+    )
+    
+    return post_processed_mask / 255.0, final_metrics
+
+####
+
+
+# 优化后预测函数 2025.3.5 --18:21(old version)
 def optimized_predict(model, image_path, mask_path=None, device="cuda", save_dir="test/predictData", patch_size=256, stride=None, value=-30, alpha=1.3):
     """
     完整的预测流程：读取图像、预处理、预测、保存结果
@@ -988,3 +1552,4 @@ def save_prediction_results(model, image_path, mask_path=None, save_dir="test/pr
     print("预测完成！")
     
     return pred_mask, metrics_result if mask_path and os.path.exists(mask_path) else None
+

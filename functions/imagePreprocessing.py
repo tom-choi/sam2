@@ -1,21 +1,12 @@
-# 这里是基于pytorch，我添加的一些图像预处理的函数，包括：
-# 1. 图像归一化
-# 2. 图像裁剪
-# 3. 图像旋转
-# 4. 图像缩放
-
-
-
+# 这里是基于pytorch，添加的一些图像预处理的函数
 
 '''
-总结建议：
+总结：
 采用"先预处理后切patch"的策略
-预处理步骤顺序：
-对比度矫正（整图）
-细胞占比矫正（整图）
-旋转增强（整图）
-Patch切分
+预处理步骤顺序参考random_preprocess
 '''
+import datetime
+import json
 import cv2
 import numpy as np
 import torch
@@ -23,56 +14,248 @@ import matplotlib
 import matplotlib.pyplot as plt
 import os
 from skimage import morphology # for denoise
+import random
 
 class ImagePreprocessor:
 
     # 图像size填充处理 以及 填充像素的颜色修改 
+    # @staticmethod
+    # def check_and_pad_image(image, mask, patch_size, padding=None):
+    #     """
+    #     检查图片尺寸是否能被patch_size整除，如果不能则根据指定的填充值进行填充
+    #     Args:
+    #         image: 原始图像 (H, W, C)
+    #         mask: 对应的mask (H, W)
+    #         patch_size: patch大小
+    #         padding: 可选的填充值元组 (top_pad, bottom_pad, left_pad, right_pad)
+    #     Returns:
+    #         处理后的image和mask，以及填充信息
+    #     """
+    #     original_h, original_w = image.shape[:2]
+        
+    #     # 计算需要填充的像素数
+    #     if padding is not None:
+    #         # 使用提供的填充值
+    #         top_pad, bottom_pad, left_pad, right_pad = padding
+    #     else:
+    #         # 计算需要填充的像素数，使其能被patch_size整除
+    #         pad_h = (patch_size - original_h % patch_size) % patch_size
+    #         pad_w = (patch_size - original_w % patch_size) % patch_size
+            
+    #         # 将填充平均分布在两侧
+    #         top_pad = pad_h // 2
+    #         bottom_pad = pad_h - top_pad
+    #         left_pad = pad_w // 2
+    #         right_pad = pad_w - left_pad
+            
+    #         # 创建填充信息
+    #         padding = (top_pad, bottom_pad, left_pad, right_pad)
+        
+    #     # 记录原始尺寸和填充信息（可以返回给调用者）
+    #     padding_info = {
+    #         "padding": padding,
+    #         "original_size": (original_h, original_w)
+    #     }
+        
+    #     # 检查是否需要填充
+    #     if top_pad == 0 and bottom_pad == 0 and left_pad == 0 and right_pad == 0:
+    #         return image, mask, padding_info
+        
+    #     # 对图像进行填充（黑色）
+    #     image = cv2.copyMakeBorder(image, 
+    #                             top_pad, bottom_pad, 
+    #                             left_pad, right_pad, 
+    #                             cv2.BORDER_CONSTANT, 
+    #                             value=[0, 0, 0])
+        
+    #     # 对mask进行填充（使用背景颜色）
+    #     background_value = 0
+    #     mask = cv2.copyMakeBorder(mask, 
+    #                             top_pad, bottom_pad, 
+    #                             left_pad, right_pad, 
+    #                             cv2.BORDER_CONSTANT, 
+    #                             value=background_value)
+        
+    #     return image, mask
+    
+    ### 3.28新增完善填充处理的图片和背景pixel值设置
     @staticmethod
-    def check_and_pad_image(image, mask, patch_size):
+    def check_and_pad_image(image, mask, patch_size, padding=None):
         """
-        检查图片尺寸是否能被patch_size整除，如果不能则用黑色填充
+        检查图片尺寸是否能被patch_size整除，如果不能则根据指定的填充值进行填充
         Args:
             image: 原始图像 (H, W, C)
-            mask: 对应的mask (H, W)
+            mask: 对应的mask (H, W)，值为0、2、255，其中2是背景
             patch_size: patch大小
+            padding: 可选的填充值元组 (top_pad, bottom_pad, left_pad, right_pad)
         Returns:
-            处理后的image和mask
+            处理后的image和mask，以及填充信息
         """
-        h, w = image.shape[:2]
+        original_h, original_w = image.shape[:2]
         
         # 计算需要填充的像素数
-        pad_h = (patch_size - h % patch_size) % patch_size
-        pad_w = (patch_size - w % patch_size) % patch_size
+        if padding is not None:
+            # 使用提供的填充值
+            top_pad, bottom_pad, left_pad, right_pad = padding
+        else:
+            # 计算需要填充的像素数，使其能被patch_size整除
+            pad_h = (patch_size - original_h % patch_size) % patch_size
+            pad_w = (patch_size - original_w % patch_size) % patch_size
+            
+            # 将填充平均分布在两侧
+            top_pad = pad_h // 2
+            bottom_pad = pad_h - top_pad
+            left_pad = pad_w // 2
+            right_pad = pad_w - left_pad
+            
+            # 创建填充信息
+            padding = (top_pad, bottom_pad, left_pad, right_pad)
         
-        if pad_h == 0 and pad_w == 0:
-            return image, mask
+        # 记录原始尺寸和填充信息（可以返回给调用者）
+        padding_info = {
+            "padding": padding,
+            "original_size": (original_h, original_w)
+        }
+        
+        # 检查是否需要填充
+        if top_pad == 0 and bottom_pad == 0 and left_pad == 0 and right_pad == 0:
+            return image, mask, padding_info
         
         # 对图像进行填充（黑色）
         image = cv2.copyMakeBorder(image, 
-                                0, pad_h, 
-                                0, pad_w, 
+                                top_pad, bottom_pad, 
+                                left_pad, right_pad, 
                                 cv2.BORDER_CONSTANT, 
                                 value=[0, 0, 0])
         
-
-        # 对mask进行填充（使用背景颜色）
-        # 获取mask的背景颜色（通常是0）
-        background_value = 0
+        # 对mask进行填充（使用背景颜色值2）
+        background_value = 2  # 将背景值设置为2
         mask = cv2.copyMakeBorder(mask, 
-                                0, pad_h, 
-                                0, pad_w, 
+                                top_pad, bottom_pad, 
+                                left_pad, right_pad, 
                                 cv2.BORDER_CONSTANT, 
                                 value=background_value)
         
-        return image, mask
+        return image, mask, padding_info
     
+    ###3.28新增计算padding_info的函数
+    def calculate_padding_info(image_height, image_width, patch_size):
+        """
+        计算图像需要的填充信息，确保图像尺寸能被patch_size整除
+        
+        参数:
+            image_height (int): 原始图像高度
+            image_width (int): 原始图像宽度
+            patch_size (int): 分块大小
+            
+        返回:
+            dict: 包含填充信息的字典
+        """
+        # 计算需要填充的尺寸
+        h_padding = (patch_size - image_height % patch_size) % patch_size
+        w_padding = (patch_size - image_width % patch_size) % patch_size
+        
+        # 记录填充信息，便于后续裁剪回原始尺寸
+        top_pad = h_padding // 2
+        bottom_pad = h_padding - top_pad
+        left_pad = w_padding // 2
+        right_pad = w_padding - left_pad
+        
+        padding_info = {
+            "top": top_pad,
+            "bottom": bottom_pad,
+            "left": left_pad,
+            "right": right_pad,
+            "original_size": (image_height, image_width)
+        }
+        
+        return padding_info
+    
+    
+    # 3.26新增，通过迁移原图像到新的画布，或许后续可以快速删除添加的黑色像素区域
+    @staticmethod
+    def _handle_edges(image, mask, patch_size):
+        """处理图像边缘，确保能被完整地分割成patch"""
+        h, w = image.shape[:2]
+        new_h = ((h - 1) // patch_size + 1) * patch_size
+        new_w = ((w - 1) // patch_size + 1) * patch_size
+        
+        # 如果尺寸已经符合要求，直接返回
+        if h == new_h and w == new_w:
+            return image, mask
+            
+        # 创建新的画布
+        new_image = np.zeros((new_h, new_w, 3), dtype=np.uint8)
+        new_mask = np.zeros((new_h, new_w), dtype=np.uint8)
+        
+        # 将原始图像和掩码复制到新画布
+        new_image[:h, :w] = image
+        new_mask[:h, :w] = mask
+        
+        return new_image, new_mask
+    
+    #### 检测透明边缘的输出图片格式
+    # @staticmethod
+    # def handle_transparent_edges(image, mask):
+    #     """
+    #     处理PNG图像的透明边缘，将其转换为黑色背景
+    #     Args:
+    #         image: 原始图像 (H, W, C)
+    #         mask: 对应的mask (H, W)
+    #     Returns:
+    #         处理后的image和mask
+    #     """
+    #     # 处理图像的透明区域
+    #     if image.shape[2] == 4:  # 如果有alpha通道
+    #         # 分离alpha通道
+    #         b, g, r, alpha = cv2.split(image)
+            
+    #         # 创建黑色背景
+    #         black_background = np.zeros_like(image[..., :3])
+            
+    #         # 将图像合成到黑色背景上
+    #         image = cv2.bitwise_and(image[..., :3], image[..., :3], mask=alpha)
+            
+    #         # 如果mask也是4通道（带alpha）
+    #         if len(mask.shape) == 3 and mask.shape[2] == 4:
+    #             _, _, _, mask_alpha = cv2.split(mask)
+    #             # 先处理mask的透明区域
+    #             mask = cv2.bitwise_and(mask[..., :3], mask[..., :3], mask=mask_alpha)
+    #             # 转换为灰度图
+    #             mask = cv2.cvtColor(mask, cv2.COLOR_BGR2GRAY)
+    #             # 确保透明区域为0
+    #             mask[mask_alpha == 0] = 0
+    #         else:
+    #             # 对单通道mask使用图像的alpha通道
+    #             mask = cv2.bitwise_and(mask, mask, mask=alpha)
+    #             # 确保透明区域为0
+    #             mask[alpha == 0] = 0
+        
+    #     # 如果mask是4通道但图像不是
+    #     elif len(mask.shape) == 3 and mask.shape[2] == 4:
+    #         _, _, _, mask_alpha = cv2.split(mask)
+    #         # 先处理mask的透明区域
+    #         mask = cv2.bitwise_and(mask[..., :3], mask[..., :3], mask=mask_alpha)
+    #         # 转换为灰度图
+    #         mask = cv2.cvtColor(mask, cv2.COLOR_BGR2GRAY)
+    #         # 确保透明区域为0
+    #         mask[mask_alpha == 0] = 0
+        
+    #     # 将mask严格二值化
+    #     _, mask = cv2.threshold(mask, 127, 255, cv2.THRESH_BINARY)
+        
+    #     return image, mask
+
+    #  # 3.5新增内容，配合predict的部分使用，记录添加的像素位置
+    
+    ###3.28新增完善检测透明边缘的输出图片格式
     @staticmethod
     def handle_transparent_edges(image, mask):
         """
         处理PNG图像的透明边缘，将其转换为黑色背景
         Args:
             image: 原始图像 (H, W, C)
-            mask: 对应的mask (H, W)
+            mask: 对应的mask (H, W)，值为0、2、255，其中2是背景
         Returns:
             处理后的image和mask
         """
@@ -92,33 +275,47 @@ class ImagePreprocessor:
                 _, _, _, mask_alpha = cv2.split(mask)
                 # 先处理mask的透明区域
                 mask = cv2.bitwise_and(mask[..., :3], mask[..., :3], mask=mask_alpha)
-                # 转换为灰度图
+                # 转换为灰度图 - 使用BGR2GRAY而非RGB2GRAY
                 mask = cv2.cvtColor(mask, cv2.COLOR_BGR2GRAY)
-                # 确保透明区域为0
-                mask[mask_alpha == 0] = 0
+                # 确保透明区域为背景值2
+                mask[mask_alpha == 0] = 2  # 使用背景值2而非0
             else:
                 # 对单通道mask使用图像的alpha通道
+                # 保存当前背景值
+                background_areas = (mask == 2)
                 mask = cv2.bitwise_and(mask, mask, mask=alpha)
-                # 确保透明区域为0
-                mask[alpha == 0] = 0
+                # 确保透明区域使用背景值2
+                mask[alpha == 0] = 2  # 使用背景值2而非0
+                # 确保原有背景区域保持为2
+                mask[background_areas] = 2
         
         # 如果mask是4通道但图像不是
         elif len(mask.shape) == 3 and mask.shape[2] == 4:
             _, _, _, mask_alpha = cv2.split(mask)
             # 先处理mask的透明区域
             mask = cv2.bitwise_and(mask[..., :3], mask[..., :3], mask=mask_alpha)
-            # 转换为灰度图
+            # 转换为灰度图 - 使用BGR2GRAY而非RGB2GRAY
             mask = cv2.cvtColor(mask, cv2.COLOR_BGR2GRAY)
-            # 确保透明区域为0
-            mask[mask_alpha == 0] = 0
+            # 确保透明区域为背景值2
+            mask[mask_alpha == 0] = 2  # 使用背景值2而非0
         
-        # 将mask严格二值化
-        _, mask = cv2.threshold(mask, 127, 255, cv2.THRESH_BINARY)
+        # 不进行二值化处理，而是确保只有0、2、255三种值
+        # 先保存当前的背景区域
+        background_areas = (mask == 2)
+        # 对非背景区域进行二值化处理
+        foreground_areas = ~background_areas
+        if np.any(foreground_areas):
+            temp_mask = mask.copy()
+            temp_mask[background_areas] = 0  # 临时将背景设为0以便二值化
+            _, temp_mask = cv2.threshold(temp_mask, 127, 255, cv2.THRESH_BINARY)
+            # 恢复处理后的前景区域
+            mask[foreground_areas] = temp_mask[foreground_areas]
+        # 确保背景值仍然是2
+        mask[background_areas] = 2
         
         return image, mask
-
-     # 3.5新增内容，配合predict的部分使用，记录添加的像素位置
     
+    @staticmethod
     def preprocess_with_padding_info(self, image_path, mask_path=None, patch_size=256, value=-30, alpha=1.3):
         """
         预处理图像并提供填充信息
@@ -345,53 +542,192 @@ class ImagePreprocessor:
     ###########   
     
     # 3.3前的旧版本
-    @staticmethod # 此方法需要结合前后景识别生成的mask去使用,旧版本
+    # @staticmethod # 此方法需要结合前后景识别生成的mask去使用,旧版本
+    # def histogram_equalization(image, mask=None):
+    #     """
+    #     改进的直方图均衡化，考虑有效区域
+    #     Args:
+    #         image: 原始图像 (H, W, C)
+    #         mask: 有效区域掩码 (H, W)，None表示全图有效
+    #     Returns:
+    #         均衡化后的图像
+    #     """
+    #     # 1. 添加输入验证
+    #     if image.dtype != np.uint8:
+    #         raise ValueError("输入图像应为uint8类型")
+        
+    #     # 2. 处理单通道图像的情况
+    #     if len(image.shape) == 2:
+    #         image = cv2.cvtColor(image, cv2.COLOR_GRAY2RGB)
+        
+    #     hsv = cv2.cvtColor(image, cv2.COLOR_RGB2HSV)
+    #     v_channel = hsv[..., 2].copy()  # 3. 使用copy避免修改原数组
+        
+    #     if mask is None:
+    #         v_channel = cv2.equalizeHist(v_channel)
+    #     else:
+    #         # 4. 确保mask是二值且与图像尺寸匹配
+    #         if mask.shape != image.shape[:2]:
+    #             raise ValueError("mask尺寸与图像不匹配")
+    #         mask = mask.astype(bool)
+            
+    #         valid_v = v_channel[mask]
+    #         if len(valid_v) == 0:
+    #             return image  # 5. 无有效区域时直接返回
+            
+    #         # 6. 使用更精确的直方图计算方法
+    #         hist = np.histogram(valid_v, bins=256, range=(0, 256))[0]
+    #         cdf = hist.cumsum()
+    #         cdf_normalized = (cdf - cdf.min()) * 255 / (cdf.max() - cdf.min() + 1e-6)
+            
+    #         # 7. 使用查找表提高效率
+    #         lut = np.interp(np.arange(256), np.arange(256), cdf_normalized).astype(np.uint8)
+    #         v_channel[mask] = lut[valid_v]
+        
+    #     hsv[..., 2] = v_channel
+    #     return cv2.cvtColor(hsv, cv2.COLOR_HSV2RGB)
+    
+ ##### 3.28矫正图片格式的histogram，对3.3的修订版
+    @staticmethod
     def histogram_equalization(image, mask=None):
         """
-        改进的直方图均衡化，考虑有效区域
+        直方图均衡化，考虑有效区域，并保持输入输出格式一致
         Args:
-            image: 原始图像 (H, W, C)
-            mask: 有效区域掩码 (H, W)，None表示全图有效
+            image: 原始图像 (H, W, C)，BGR或RGB格式，3通道
+            mask: 有效区域掩码 (H, W)，灰度格式，值为0、2、255
         Returns:
-            均衡化后的图像
+            均衡化后的图像，与输入格式相同
         """
-        # 1. 添加输入验证
+        # 检查输入类型
         if image.dtype != np.uint8:
             raise ValueError("输入图像应为uint8类型")
         
-        # 2. 处理单通道图像的情况
-        if len(image.shape) == 2:
-            image = cv2.cvtColor(image, cv2.COLOR_GRAY2RGB)
+        # 保存原始图像形状信息
+        original_shape = image.shape
+        channels = 1 if len(original_shape) == 2 else original_shape[2]
         
-        hsv = cv2.cvtColor(image, cv2.COLOR_RGB2HSV)
-        v_channel = hsv[..., 2].copy()  # 3. 使用copy避免修改原数组
+        # 对RGB/BGR图像处理 - 转HSV处理亮度通道
+        if channels == 3:
+            # 转HSV以处理亮度通道
+            hsv = cv2.cvtColor(image, cv2.COLOR_BGR2HSV)  # 假设是BGR格式，如实际是RGB则需调整
+            v_channel = hsv[..., 2].copy()
+            
+            if mask is None:
+                # 整体均衡化
+                v_channel = cv2.equalizeHist(v_channel)
+            else:
+                # 确保mask是二值且与图像尺寸匹配
+                if mask.shape != image.shape[:2]:
+                    raise ValueError("mask尺寸与图像不匹配")
+                
+                # 创建有效区域mask - 通常我们将非背景区域视为有效区域
+                # 根据您的数据，值为2的是背景，所以mask != 2的是有效区域
+                valid_mask = (mask != 2)
+                
+                valid_v = v_channel[valid_mask]
+                if len(valid_v) == 0:
+                    return image  # 无有效区域时直接返回
+                
+                # 直方图均衡化
+                hist = np.histogram(valid_v, bins=256, range=(0, 256))[0]
+                cdf = hist.cumsum()
+                # 避免除零错误
+                if cdf[-1] == 0:
+                    return image
+                cdf_normalized = (cdf - cdf.min()) * 255 / (cdf.max() - cdf.min() + 1e-6)
+                
+                # 使用查找表
+                lut = np.interp(np.arange(256), np.arange(256), cdf_normalized).astype(np.uint8)
+                v_channel[valid_mask] = lut[valid_v]
+            
+            # 更新亮度通道
+            hsv[..., 2] = v_channel
+            
+            # 转回原始颜色空间
+            result = cv2.cvtColor(hsv, cv2.COLOR_HSV2BGR)  # 与转换时使用相同的变换对
+        
+        # 对灰度图直接处理    
+        else:
+            if mask is None:
+                result = cv2.equalizeHist(image)
+            else:
+                if mask.shape != image.shape:
+                    raise ValueError("mask尺寸与图像不匹配")
+                
+                练的时候使用valid_mask = (mask != 2)
+                v_channel = image.copy()
+                valid_v = v_channel[valid_mask]
+                
+                if len(valid_v) == 0:
+                    return image
+                
+                hist = np.histogram(valid_v, bins=256, range=(0, 256))[0]
+                cdf = hist.cumsum()
+                if cdf[-1] == 0:
+                    return image
+                cdf_normalized = (cdf - cdf.min()) * 255 / (cdf.max() - cdf.min() + 1e-6)
+                
+                lut = np.interp(np.arange(256), np.arange(256), cdf_normalized).astype(np.uint8)
+                v_channel[valid_mask] = lut[valid_v]
+                
+                result = v_channel
+        
+        return result.astype(np.uint8)
+    
+    
+    # 3.26新版直方图
+    def enhance_image(self, image, mask=None):
+        """图像增强处理，提高细节和纹理可见性"""
+        # 将图像转换为LAB色彩空间处理
+        lab = cv2.cvtColor(image, cv2.COLOR_RGB2LAB)
+        l_channel = lab[:,:,0]
+        
+        # 使用CLAHE (对比度受限自适应直方图均衡化)
+        clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8,8))
         
         if mask is None:
-            v_channel = cv2.equalizeHist(v_channel)
+            cl = clahe.apply(l_channel)
         else:
-            # 4. 确保mask是二值且与图像尺寸匹配
-            if mask.shape != image.shape[:2]:
-                raise ValueError("mask尺寸与图像不匹配")
-            mask = mask.astype(bool)
-            
-            valid_v = v_channel[mask]
-            if len(valid_v) == 0:
-                return image  # 5. 无有效区域时直接返回
-            
-            # 6. 使用更精确的直方图计算方法
-            hist = np.histogram(valid_v, bins=256, range=(0, 256))[0]
-            cdf = hist.cumsum()
-            cdf_normalized = (cdf - cdf.min()) * 255 / (cdf.max() - cdf.min() + 1e-6)
-            
-            # 7. 使用查找表提高效率
-            lut = np.interp(np.arange(256), np.arange(256), cdf_normalized).astype(np.uint8)
-            v_channel[mask] = lut[valid_v]
+            # 只对前景应用CLAHE
+            cl = l_channel.copy()
+            foreground = mask > 0
+            cl[foreground] = clahe.apply(l_channel[foreground].reshape(-1)).reshape(-1)
         
-        hsv[..., 2] = v_channel
-        return cv2.cvtColor(hsv, cv2.COLOR_HSV2RGB)
+        # 更新L通道
+        lab[:,:,0] = cl
+        return cv2.cvtColor(lab, cv2.COLOR_LAB2RGB)
+    
     ###########
    
-   
+    
+    #3.26新增，此方法暂时不确定是否可行，需要验证
+    @staticmethod
+    def standardize_image(self, image):
+        """标准化图像到均值0，方差1，提高模型训练稳定性"""
+        image = image.astype(np.float32)
+        mean = np.mean(image, axis=(0, 1))
+        std = np.std(image, axis=(0, 1)) + 1e-6  # 避免除以0
+        return (image - mean) / std
+    
+    # #3.26版,噪声移除
+    # def denoise_image(self, image, mask=None):
+    #     """非局部均值去噪，保留图像细节的同时去除噪声"""
+    #     if mask is None:
+    #         return cv2.fastNlMeansDenoisingColored(image, None, 10, 10, 7, 21)
+    #     else:
+    #         result = image.copy()
+    #         foreground = mask > 0
+    #         # 只对前景区域去噪
+    #         if np.any(foreground):
+    #             # 创建ROI
+    #             x, y, w, h = cv2.boundingRect(foreground.astype(np.uint8))
+    #             roi = image[y:y+h, x:x+w]
+    #             # 对ROI应用去噪
+    #             denoised_roi = cv2.fastNlMeansDenoisingColored(roi, None, 10, 10, 7, 21)
+    #             # 使用掩码将去噪结果合并回原图
+    #             mask_roi = foreground[y:y+h, x:x+w]
+    #             result[y:y+h, x:x+w][mask_roi] = denoised_roi[mask_roi]
+    #         return result
 
 
 
@@ -407,25 +743,160 @@ class ImagePreprocessor:
 
     # 图像旋转
     '''
-    这里的旋转是为了训练的时候增强数据集，让模型更加鲁棒，视图都是2D的，
-    训练的时候可以随机旋转图像，增强数据集。
-    这里的旋转是以图像中心为旋转中心，可以指定旋转中心，并且旋转后维持图像的比例，
-    然后根据边缘的缺少像素来执行填补像素的function。
-    这里的旋转角度可以设定，也可以随机设定。
+    这个函数专注于图像旋转，同时处理图像及其对应的掩码。
+    旋转是以图像中心为旋转中心，旋转后维持图像的原始尺寸。
+    旋转角度通过参数angle从外部获取。
     '''
     @staticmethod
-    def rotate(img, angle, center=None, scale=1.0):
+    def rotate(img, mask, angle):
+        # 获取图像尺寸
         h, w = img.shape[:2]
-        if center is None:
-            center = (w/2, h/2)
-        M = cv2.getRotationMatrix2D(center, angle, scale)
-        img = cv2.warpAffine(img, M, (w, h))
-        return img
+        # 设置旋转中心为图像中心
+        center = (w/2, h/2)
+        # 计算旋转矩阵
+        M = cv2.getRotationMatrix2D(center, angle, 1.0)
+        # 对图像进行旋转
+        rotated_img = cv2.warpAffine(img, M, (w, h))
+        # 对掩码进行相同的旋转
+        rotated_mask = cv2.warpAffine(mask, M, (w, h))
+        
+        return rotated_img, rotated_mask
+
+    # 图像缩放
+    '''
+    这个函数专注于图像缩放，同时处理图像及其对应的掩码。
+    缩放是按照比例进行的，直接返回缩放后的图像和掩码。
+    缩放比例通过参数scale从外部获取。
+    '''
+    @staticmethod
+    def scale(img, mask, scale, patch_size=256):
+        """
+        对图像和掩码进行缩放，并确保缩放后的尺寸是patch_size的整数倍
+        
+        Args:
+            img: 输入图像
+            mask: 输入掩码
+            scale: 缩放因子
+            patch_size: 补丁大小，默认为256
+            
+        Returns:
+            缩放后的图像和掩码
+        """
+        # 获取原始尺寸
+        h, w = img.shape[:2]
+        
+        # 计算缩放后的尺寸
+        new_h = int(h * scale)
+        new_w = int(w * scale)
+        
+        # 调整尺寸确保是patch_size的整数倍
+        remainder_h = new_h % patch_size
+        remainder_w = new_w % patch_size
+        
+        if remainder_h != 0:
+            # 调整高度到最近的patch_size的整数倍
+            new_h = new_h + (patch_size - remainder_h) if remainder_h > patch_size / 2 else new_h - remainder_h
+        
+        if remainder_w != 0:
+            # 调整宽度到最近的patch_size的整数倍
+            new_w = new_w + (patch_size - remainder_w) if remainder_w > patch_size / 2 else new_w - remainder_w
+        
+        # 确保尺寸至少为patch_size
+        new_h = max(patch_size, new_h)
+        new_w = max(patch_size, new_w)
+        
+        # 计算实际使用的缩放因子
+        actual_scale_h = new_h / h
+        actual_scale_w = new_w / w
+        
+        # 对图像进行缩放
+        scaled_img = cv2.resize(img, (new_w, new_h), interpolation=cv2.INTER_LINEAR)
+        # 对掩码进行相同的缩放
+        scaled_mask = cv2.resize(mask, (new_w, new_h), interpolation=cv2.INTER_NEAREST)
+        
+        # 如果想记录实际使用的缩放因子，可以打印或返回
+        # print(f"原始缩放因子: {scale}, 实际缩放因子: 高度={actual_scale_h}, 宽度={actual_scale_w}")
+        
+        return scaled_img, scaled_mask
 
 
 
 
+###### 旧版3.28之前的亮度和对比度调整
 
+    # # 亮度调整
+    # @staticmethod # 此方法需要结合前后景识别生成的mask去使用
+    # def adjust_brightness(image, value=0, mask=None):
+    #     """
+    #     改进的亮度调整，只处理前景区域
+    #     Args:
+    #         image: 原始图像 (H, W, C)
+    #         value: 亮度调整值，正数增加亮度，负数减少亮度
+    #         mask: 前景mask (H, W)，None表示全图处理
+    #     Returns:
+    #         调整亮度后的图像
+    #     """
+    #     hsv = cv2.cvtColor(image, cv2.COLOR_RGB2HSV)
+    #     h, s, v = cv2.split(hsv)
+        
+    #     if mask is None:
+    #         # 如果没有mask，处理全图
+    #         lim = 255 - value
+    #         v[v > lim] = 255
+    #         v[v <= lim] = np.clip(v[v <= lim] + value, 0, 255)
+    #     else:
+    #         # 只处理前景区域
+    #         foreground = mask > 0
+    #         v_foreground = v[foreground]
+            
+    #         lim = 255 - value
+    #         v_foreground[v_foreground > lim] = 255
+    #         v_foreground[v_foreground <= lim] = np.clip(v_foreground[v_foreground <= lim] + value, 0, 255)
+            
+    #         v[foreground] = v_foreground
+        
+    #     final_hsv = cv2.merge((h, s, v))
+    #     image = cv2.cvtColor(final_hsv, cv2.COLOR_HSV2RGB)
+    #     return image.astype(np.uint8)
+
+    # # 对比度调整
+    # @staticmethod # 此方法需要结合前后景识别生成的mask去使用
+    # def adjust_contrast(image, alpha=1.0, mask=None):
+    #     """
+    #     改进的对比度调整，只处理前景区域
+    #     Args:
+    #         image: 原始图像 (H, W, C)
+    #         alpha: 对比度调整系数，大于1增加对比度，小于1减少对比度
+    #         mask: 前景mask (H, W)，None表示全图处理
+    #     Returns:
+    #         调整对比度后的图像
+    #     """
+    #     hsv = cv2.cvtColor(image, cv2.COLOR_RGB2HSV)
+        
+    #     if mask is None:
+    #         # 如果没有mask，处理全图
+    #         hsv[..., 2] = cv2.convertScaleAbs(hsv[..., 2], alpha=alpha, beta=0)
+    #     else:
+    #         # 只处理前景区域
+    #         foreground = mask > 0
+    #         v_channel = hsv[..., 2]
+            
+    #         # 获取前景区域的V通道值
+    #         v_foreground = v_channel[foreground]
+            
+    #         # 调整对比度
+    #         v_foreground = cv2.convertScaleAbs(v_foreground, alpha=alpha, beta=0)
+            
+    #         # 将调整后的值重新赋值回原数组
+    #         v_channel[foreground] = v_foreground.reshape(-1)  # 确保是一维数组
+    #         hsv[..., 2] = v_channel
+        
+    #     return cv2.cvtColor(hsv, cv2.COLOR_HSV2RGB)
+
+#####
+    
+    
+########下面是3.28修订格式版的亮度和对比度调整
 
     # 亮度调整
     @staticmethod # 此方法需要结合前后景识别生成的mask去使用
@@ -439,7 +910,7 @@ class ImagePreprocessor:
         Returns:
             调整亮度后的图像
         """
-        hsv = cv2.cvtColor(image, cv2.COLOR_RGB2HSV)
+        hsv = cv2.cvtColor(image, cv2.COLOR_BGR2HSV)  # 改为BGR2HSV
         h, s, v = cv2.split(hsv)
         
         if mask is None:
@@ -459,7 +930,7 @@ class ImagePreprocessor:
             v[foreground] = v_foreground
         
         final_hsv = cv2.merge((h, s, v))
-        image = cv2.cvtColor(final_hsv, cv2.COLOR_HSV2RGB)
+        image = cv2.cvtColor(final_hsv, cv2.COLOR_HSV2BGR)  # 改为HSV2BGR
         return image.astype(np.uint8)
 
     # 对比度调整
@@ -474,7 +945,7 @@ class ImagePreprocessor:
         Returns:
             调整对比度后的图像
         """
-        hsv = cv2.cvtColor(image, cv2.COLOR_RGB2HSV)
+        hsv = cv2.cvtColor(image, cv2.COLOR_BGR2HSV)  # 改为BGR2HSV
         
         if mask is None:
             # 如果没有mask，处理全图
@@ -494,45 +965,29 @@ class ImagePreprocessor:
             v_channel[foreground] = v_foreground.reshape(-1)  # 确保是一维数组
             hsv[..., 2] = v_channel
         
-        return cv2.cvtColor(hsv, cv2.COLOR_HSV2RGB)
+        return cv2.cvtColor(hsv, cv2.COLOR_HSV2BGR)  # 改为HSV2BGR
     
-
-
-
-
-
-   
-   
-    @staticmethod # 生成前后景mask,此版本是基于轮廓检测的
-    def generate_mask(image, background_threshold=10, min_contour_area=100):
+    # 3.28新增mask处理，直接选mask区域值为2的作为背景(数据集mask标签做好就可以用这个)
+    @staticmethod
+    def generate_mask(mask, background_value=2):
         """
-        改进的mask生成，基于轮廓检测
+        处理细胞掩码图像，将指定值(例如2)的区域设为背景，生成前后景掩码
+        
         Args:
-            image: 原始图像 (H, W, C)
-            background_threshold: 背景判断阈值，默认10
-            min_contour_area: 最小轮廓面积，小于该值的区域将被忽略
+            mask: 输入的掩码图像 (H, W)，可能包含多个值
+            background_value: 要识别为背景的像素值，默认为2
+            
         Returns:
-            前景mask (H, W)，前景为255，背景为0
+            处理后的掩码 (H, W)，前景保持原值(如255)，背景为0
         """
-        # 将图像转换为灰度图
-        gray = cv2.cvtColor(image, cv2.COLOR_RGB2GRAY)
+        # 创建新的掩码
+        # print(type(mask))
+        processed_mask = mask.copy()
         
-        # 二值化处理
-        _, binary = cv2.threshold(gray, background_threshold, 255, cv2.THRESH_BINARY)
+        # 将背景值设为0，其他值保持不变
+        processed_mask[processed_mask == background_value] = 0
         
-        # 查找轮廓
-        contours, _ = cv2.findContours(binary, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
-        
-        # 创建mask
-        mask = np.zeros_like(gray)
-        
-        # 绘制轮廓
-        for contour in contours:
-            if cv2.contourArea(contour) > min_contour_area:
-                cv2.drawContours(mask, [contour], -1, 255, -1)
-        
-        return mask
-    
+        return processed_mask
     
     # 图像缩放
     ''' 主要用途是配合图像旋转，还有细胞比例的矫正，用于调用
@@ -544,22 +999,31 @@ class ImagePreprocessor:
         img = cv2.resize(img, size)
         return img
     
-####### Post-Processing part  后处理部分
+    
+    @staticmethod
+    def show_image(self, image, title="Image"):
+        """
+        显示图像
+        Args:
+            image: 要显示的图像
+            title: 图像的标题
+        """
+        plt.figure(figsize=(8, 6))
+        plt.imshow(image)
+        plt.title(title)
+        plt.axis('off')
+        plt.show()
+ 
+    
+################### Post-Processing part  
+
 
 
     #####  新的高级形态学去噪函数（基于连通域分析）  #######
 
     @staticmethod
-    def advanced_denoise(
-        input_image,                    # 输入图像变量
-        binary_threshold=128,           # 二值化阈值（0-255）
-        min_noise_size=50,              # 最小噪声面积（小于此值的白色区域会被移除）
-        max_hole_size=100,              # 最大孔洞面积（小于此值的黑色孔洞会被填充）
-        opening_radius=2,               # 开操作结构元半径（控制边缘平滑度）
-        closing_radius=None,            # 闭操作结构元半径（可选，用于连接断裂区域）
-        invert_input=False,             # 是否反转输入图像（黑/白反转）
-        invert_output=False             # 是否反转输出图像
-    ):
+    def advanced_denoise(input_image, binary_threshold=128, min_noise_size=50, max_hole_size=100,
+                        opening_radius=2, closing_radius=None, invert_input=False, invert_output=False):
         """
         高级形态学去噪函数（基于连通域分析）
         
@@ -617,7 +1081,7 @@ class ImagePreprocessor:
         
         # 返回结果图像
         return result
-
+    
     # 示例调用
     # img = cv2.imread('input.jpg')
     # result = advanced_denoise(
@@ -632,25 +1096,124 @@ class ImagePreprocessor:
     #     invert_output=False          # 是否反转输出图像
     # )  
     # cv2.imwrite('output.jpg', result)
+
+##########################    
+ 
+
+#######################  随机参数生成  ###############
+
+    #生成随机参数
+    def generate_random_params(self, param_ranges=None, record_seed=True):
+        """
+        生成随机参数
+        Args:
+            param_ranges: 参数范围字典，格式为 {'参数名': (最小值, 最大值)}
+            record_seed: 是否记录随机种子
+        Returns:
+            随机参数字典
+        """
+        # 默认参数范围
+        default_ranges = {
+            'value': (-50, 20),               # 亮度调整
+            'alpha': (0.65, 1.2),              # 对比度调整
+            'low_percentile': (0, 10),         # 低百分位
+            'high_percentile': (90, 100),     # 高百分位
+            'scale': (0.8, 1.2),               # 缩放比例范围
+             'rotation': [90, 180, 270],        # 旋转角度选项，只有三个90度方向
+            # 可以添加更多参数
+        }
+        
+        # 使用用户提供的参数范围覆盖默认值
+        if param_ranges:
+            for param, range_val in param_ranges.items():
+                default_ranges[param] = range_val
+        
+        # 设置随机种子
+        if record_seed:
+            seed = random.randint(0, 2**32 - 1)
+            random.seed(seed)
+            np.random.seed(seed)
+        else:
+            seed = None    
+        
+        # 生成随机参数
+        random_params = {'seed': seed}
+        for param, range_val in default_ranges.items():
+            if param == 'rotation':
+                # 特殊处理旋转角度 - 从列表中随机选择
+                random_params[param] = random.choice(range_val)
+            elif isinstance(range_val, tuple):
+                min_val, max_val = range_val
+                if isinstance(min_val, int) and isinstance(max_val, int):
+                    random_params[param] = random.randint(min_val, max_val)
+                else:
+                    random_params[param] = random.uniform(min_val, max_val)
+        
+        return random_params
     
+    # 保存随机种子
+    def save_params(self, params, folder='preprocessedSeed'):
+        """
+        保存参数到文件
+        Args:
+            params: 参数字典
+            folder: 保存文件夹路径
+        Returns:
+            保存的文件路径
+        """
+        # 创建保存文件夹
+        os.makedirs(folder, exist_ok=True)
+        
+        # 生成文件名，包含时间戳和种子值
+        timestamp = datetime.datetime.now().strftime('%Y%m%d_%H%M%S')
+        seed = params.get('seed', 'unknown')
+        filename = f"params_{timestamp}_seed{seed}.json"
+        filepath = os.path.join(folder, filename)
+        
+        # 保存参数到JSON文件
+        with open(filepath, 'w') as f:
+            json.dump(params, f, indent=4)
+        
+        return filepath
+    # 加载随机种子
+    def load_params(self, filepath):
+        """
+        从文件加载参数
+        Args:
+            filepath: 参数文件路径
+        Returns:
+            参数字典
+        """
+        with open(filepath, 'r') as f:
+            params = json.load(f)
+        return params
+
+## 下面是调用示例
+  
+# # 生成新的随机参数进行预处理
+# processed_image, processed_mask, params = processor.random_preprocess(
+#     image, mask, patch_size=256, padding=0)
+
+# # 使用已有参数文件进行预处理
+# processed_image, processed_mask, params  = processor.random_preprocess(
+#     image, mask, patch_size=256, padding=0, 
+#     seed_file='preprocessedSeed/params_20230501_120000_seed123456789.json')
+
+# # 自定义参数范围
+# custom_ranges = {
+#     'value': (-50, 50),
+#     'alpha': (0.7, 1.5),
+#     'rotation': (0, 90)  # 限制旋转角度在0-90度范围 [[1]](https://poe.com/citation?message_id=370359726898&citation=1)
+# }
+# processed_image, processed_mask, params, param_file = processor.random_preprocess(
+#     image, mask, patch_size=256, padding=0, param_ranges=custom_ranges)
     
 #######################
+
+
     
-    def show_image(self, image, title="Image"):
-        """
-        显示图像
-        Args:
-            image: 要显示的图像
-            title: 图像的标题
-        """
-        plt.figure(figsize=(8, 6))
-        plt.imshow(image)
-        plt.title(title)
-        plt.axis('off')
-        plt.show()
-    
-    # 总流程
-    def preprocess(self, image, mask, patch_size , value=0 , alpha=1):
+    #  3.26前旧版总流程(不含random)
+    def preprocess(self, image, mask, patch_size ,padding=None, value=0 , alpha=1):
         """
         完整的预处理流程
         Args:
@@ -662,7 +1225,7 @@ class ImagePreprocessor:
             处理后的image和mask
         """
         
-        mask_background = self.generate_mask(image, background_threshold=10)
+        mask_background = self.generate_mask(mask)
         
         # 1. 归一化处理 (屏蔽黑色背景)
         image = self.normalize_image(image, mask_background)
@@ -676,20 +1239,104 @@ class ImagePreprocessor:
         # 处理透明边缘
         image, mask = self.handle_transparent_edges(image, mask)
         # 图像填充
-        image, mask = self.check_and_pad_image(image, mask, patch_size)
+        image, mask,_ = self.check_and_pad_image(image, mask, patch_size, padding)
 
      
         
         return image, mask
     
+    
+    ## 4.2单一process步骤
+    def preprocess_random(self, image, mask, patch_size, padding, value,alpha,low_percentile,high_percentile,rotation,scale):
+                # 创建mask_background
+        mask_background = self.generate_mask(mask)
+        
+        # 1. 归一化处理，使用随机百分位数
+        image = self.normalize_image(image, mask_background, 
+                                    low_percentile=low_percentile, 
+                                    high_percentile=high_percentile)
+        
+        # 2. 直方图均衡化
+        image = self.histogram_equalization(image, mask_background)
+        
+        # 3. 亮度调整
+        image = self.adjust_brightness(image, value, mask_background)
+        
+        # 4. 对比度调整
+        image = self.adjust_contrast(image, alpha, mask_background)
+        
+        # 5. 旋转
+        image, mask = self.rotate(image, mask, rotation)
+        
+        # 6. 缩放
+        image, mask = self.scale(image, mask, scale,patch_size)
+        
+        # 处理透明边缘
+        image, mask = self.handle_transparent_edges(image, mask)
+        
+        # 图像填充
+        image, mask, _ = self.check_and_pad_image(image, mask, patch_size, padding)
+        
 
-
-
-
-
-
-    # 测试单张图片的流程，用于自行查看process的效果
-    def preprocess_show(self, image_path, mask_path, patch_size , value=0 , alpha=1.0):
+        
+        return image, mask
+    
+    ## 4.2总流程 random_preprocess
+    def random_preprocess(self, image, mask, patch_size, padding=None, param_ranges=None, 
+                     seed_folder='preprocessedSeed', seed_file=None):
+        """
+        随机参数预处理或基于已有参数文件的预处理
+        
+        Args:
+            image: 原始图像
+            mask: 对应的mask
+            patch_size: patch大小
+            padding: 填充值
+            param_ranges: 参数范围字典，仅在需要生成新参数时使用
+            seed_folder: 保存/加载参数的文件夹
+            seed_file: 要使用的已有参数文件的路径，如果为None则生成新参数
+            
+        Returns:
+            处理后的image和mask，以及参数字典和参数文件路径
+        """
+        # 创建参数保存文件夹
+        os.makedirs(seed_folder, exist_ok=True)
+        
+        # 判断是使用已有参数还是生成新参数
+        if seed_file and os.path.exists(seed_file):
+            # 从文件加载参数
+            params = self.load_params(seed_file)
+            param_file = seed_file
+            
+            # 设置随机种子以保证一致性
+            if 'seed' in params and params['seed'] is not None:
+                random.seed(params['seed'])
+                np.random.seed(params['seed'])
+        else:
+            # 生成随机参数
+            params = self.generate_random_params(param_ranges, record_seed=True)
+            
+            # 保存参数到文件
+            param_file = self.save_params(params, folder=seed_folder)
+        
+        # 从参数中提取值
+        value = params.get('value', 0)
+        alpha = params.get('alpha', 1)
+        low_percentile = params.get('low_percentile', 1)
+        high_percentile = params.get('high_percentile', 99)
+        scale = params.get('scale', 1.0)
+        rotation = params.get('rotation', 0)
+        
+        # 调用preprocess_random函数进行预处理，采用"先预处理后切patch"的策略 
+        processed_image, processed_mask = self.preprocess_random(
+            image, mask, patch_size, padding, 
+            value, alpha, low_percentile, high_percentile,rotation,scale
+        )
+        
+        return processed_image, processed_mask, params
+    
+    ## 自测函数
+    def preprocess_show(self, image_path, mask_path, patch_size , padding,value=0 , alpha=1.0):
         """
         完整的预处理流程
         Args:
@@ -700,7 +1347,7 @@ class ImagePreprocessor:
             numpy.ndarray: 处理后的图像
             numpy.ndarray: 处理后的mask
             
-            
+        
         1. 归一化处理：
         基于图像的均值和标准差进行归一化
         保留图像的相对亮度信息
@@ -717,42 +1364,37 @@ class ImagePreprocessor:
         # 读取图像和mask
         image = cv2.imread(image_path)
         image = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
+        #这种颜色空间转换不会导致训练带来偏差，只是改变了通道的顺序（从BGR变为RGB），没有修改像素值本身
+        
+        
         mask = cv2.imread(mask_path, cv2.IMREAD_GRAYSCALE)
 
     
         # 显示原始图像和mask
         self.show_image(image, title="Original Image")
         self.show_image(mask, title="Original Mask")
-        
-        mask_background = self.generate_mask(image, background_threshold=10)
+        mask_background = self.generate_mask(mask)
         self.show_image(mask_background, title="Background Mask")
         
+
         
         # 1. 归一化处理 (屏蔽黑色背景)
         image = self.normalize_image(image, mask_background)
-        print("normalize_image done")
+        
         # 2. 直方图均衡化 (屏蔽黑色背景) 
         image = self.histogram_equalization(image, mask_background)
-        print("histogram_equalization done")
         # 3. 亮度调整
         image = self.adjust_brightness(image, value, mask_background)
-        print("adjust_brightness done")
         # 4. 对比度调整
         image = self.adjust_contrast(image, alpha, mask_background)
-        print("adjust_contrast done")
         # 处理透明边缘
         image, mask = self.handle_transparent_edges(image, mask)
-        print("handle_transparent_edges done")  
         # 图像填充
-        image, mask = self.check_and_pad_image(image, mask, patch_size)
-        print("check_and_pad_image done")
-
-
-
-
+        image, mask = self.check_and_pad_image(image, mask, patch_size, padding)
 
         # 显示处理后的图像和mask
         self.show_image(image, title="Processed Image")
         self.show_image(mask, title="Processed Mask")
 
-        return image, mask, mask_background
+        return image, mask, mask_background  
+

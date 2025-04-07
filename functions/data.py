@@ -7,7 +7,7 @@ import numpy as np
 from typing import List, Dict, Tuple, Optional
 from torchvision import transforms
 import matplotlib.pyplot as plt
-from torch.utils.data import Dataset
+from torch.utils.data import Dataset, DataLoader
 import random
 
 from tqdm import tqdm # 3.5 下午新增
@@ -217,7 +217,8 @@ class SegmentationDataset(torch.utils.data.Dataset):
             
             # 前置处理
             if preProcess:
-                image, mask = self.preprocessor.preprocess(image, mask, patch_size)
+                # image, mask = self.preprocessor.preprocess(image, mask, patch_size)
+                image, mask, params = self.preprocessor.random_preprocess(image, mask, patch_size=256)
             
             # 获取图像尺寸
             h, w = image.shape[:2]
@@ -250,6 +251,84 @@ class SegmentationDataset(torch.utils.data.Dataset):
                 self.image_indices.append(idx)  # 记录原始图像索引
         
         print(f"数据集预处理完成，共生成 {len(self.all_patches)} 个patch")
+
+    # ##新增3.26新版初始化，修改了图片预处理方式和顺序
+    # def __init__(self, data_list, patch_size=128, stride=64, preProcess=True, transform=None):
+    #     """
+    #     初始化数据集
+    #     Args:
+    #         data_list: 包含图像和标注路径的列表
+    #         patch_size: 切片大小
+    #         stride: 滑动窗口步长
+    #         preProcess: 是否进行预处理
+    #         transform: 数据增强转换
+    #     """
+    #     self.data_list = data_list
+    #     self.patch_size = patch_size
+    #     self.stride = stride
+    #     self.transform = transform
+    #     self.preProcess = preProcess
+    #     self.preprocessor = ImagePreprocessor()
+        
+    #     # 预处理所有图像的patches
+    #     self.all_patches = []
+    #     self.all_masks = []
+    #     self.all_positions = []
+    #     self.all_original_sizes = []
+    #     self.all_image_paths = []
+    #     self.all_mask_paths = []
+    #     self.image_indices = []  # 新增: 记录每个patch对应的原始图像索引
+        
+    #     # 预处理模块初始化
+    #     print("开始数据集预处理...")
+        
+    #     # 处理每张图片
+    #     for idx, item in enumerate( tqdm(data_list, desc="处理图像")):
+    #         # 读取图像
+    #         image = cv2.imread(item["image"])
+    #         image = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
+    #         mask = cv2.imread(item["annotation"], cv2.IMREAD_GRAYSCALE)
+            
+    #         # 大图片的初步前置处理
+    #         image, mask = self.preprocessor.preprocess_edge(image, mask, patch_size)
+            
+    #         # 获取图像尺寸
+    #         h, w = image.shape[:2]
+    #         original_size = (h, w)
+            
+    #         # 计算所有有效的patch位置
+    #         positions = self._calculate_positions(h, w)
+            
+    #         # 处理每个位置的patch
+    #         for y, x in positions:
+    #             # 提取patch
+    #             patch = image[y:y+self.patch_size, x:x+self.patch_size].copy()
+    #             mask_patch = mask[y:y+self.patch_size, x:x+self.patch_size].copy()
+                
+    #             # 对每个patch进行预处理
+    #             if preProcess:
+    #                 patch,mask_patch = self.preprocessor.preprocess_patch(patch, mask_patch)
+                
+    #             # 数据增强(开启可用)
+    #             if self.transform:
+    #                 augmented = self.transform(image=patch, mask=mask_patch)
+    #                 patch = augmented['image']
+    #                 mask_patch = augmented['mask']
+                
+    #             # 转换为tensor
+    #             patch = torch.FloatTensor(patch.transpose(2, 0, 1)) / 255.0
+    #             mask_patch = torch.FloatTensor(mask_patch).unsqueeze(0) / 255.0
+                
+    #             # 存储结果
+    #             self.all_patches.append(patch)
+    #             self.all_masks.append(mask_patch)
+    #             self.all_positions.append((y, x))
+    #             self.all_original_sizes.append(original_size)
+    #             self.all_image_paths.append(item["image"])
+    #             self.all_mask_paths.append(item["annotation"])
+    #             self.image_indices.append(idx)  # 记录原始图像索引
+        
+    #     print(f"数据集预处理完成，共生成 {len(self.all_patches)} 个patch")
 
     def _calculate_positions(self, h, w):
         """计算图像中所有有效的patch位置"""
@@ -698,6 +777,97 @@ class SegmentationDataset(torch.utils.data.Dataset):
         print(f"图像块形状: {self.all_patches[0].shape}")
         print(f"掩码块形状: {self.all_masks[0].shape}")
 
+### 3.28新增 转化函数，np数组和tenser张量转化和识别的函数
+    def convert_to_tensor(data, dtype=torch.float32):
+        """
+        将输入数据转换为PyTorch张量
+        
+        参数:
+            data: 输入数据 (NumPy数组或PyTorch张量)
+            dtype: 目标数据类型 (默认为float32)
+            
+        返回:
+            tensor: 转换后的PyTorch张量
+        """
+        if isinstance(data, np.ndarray):
+            # NumPy数组转换为PyTorch张量
+            return torch.from_numpy(data).to(dtype)
+        elif isinstance(data, torch.Tensor):
+            # 已经是PyTorch张量，只需确保数据类型正确
+            return data.to(dtype)
+        else:
+            # 其他类型尝试转换为张量
+            return torch.tensor(data, dtype=dtype)
 
 
+    def convert_to_numpy(data, dtype=np.float32):
+        """
+        将输入数据转换为NumPy数组
+        
+        参数:
+            data: 输入数据 (NumPy数组或PyTorch张量)
+            dtype: 目标数据类型 (默认为float32)
+            
+        返回:
+            array: 转换后的NumPy数组
+        """
+        if isinstance(data, torch.Tensor):
+            # PyTorch张量转换为NumPy数组
+            return data.detach().cpu().numpy().astype(dtype)
+        elif isinstance(data, np.ndarray):
+            # 已经是NumPy数组，只需确保数据类型正确
+            return data.astype(dtype)
+        else:
+            # 其他类型尝试转换为数组
+            return np.array(data, dtype=dtype)
 
+
+    def is_tensor(data):
+        """
+        检查数据是否为PyTorch张量
+        
+        参数:
+            data: 输入数据
+            
+        返回:
+            bool: 是张量返回True，否则返回False
+        """
+        return isinstance(data, torch.Tensor)
+
+
+    def is_numpy(data):
+        """
+        检查数据是否为NumPy数组
+        
+        参数:
+            data: 输入数据
+            
+        返回:
+            bool: 是NumPy数组返回True，否则返回False
+        """
+        return isinstance(data, np.ndarray)
+
+
+def get_optimized_loaders(train_dataset, test_dataset, batch_size=16, num_workers=4, prefetch_factor=2):
+    """创建优化的数据加载器"""
+    train_loader = DataLoader(
+        train_dataset, 
+        batch_size=batch_size, 
+        shuffle=True,
+        num_workers=num_workers,  # 增加工作线程
+        pin_memory=True,  # 使用固定内存加速CPU到GPU的数据传输
+        prefetch_factor=prefetch_factor,  # 预取因子
+        persistent_workers=True  # 保持工作线程存活
+    )
+    
+    test_loader = DataLoader(
+        test_dataset, 
+        batch_size=batch_size, 
+        shuffle=False,
+        num_workers=num_workers,
+        pin_memory=True,
+        prefetch_factor=prefetch_factor,
+        persistent_workers=True
+    )
+    
+    return train_loader, test_loader
