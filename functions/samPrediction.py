@@ -107,7 +107,7 @@ OVERLAP_THRESHOLD = 0.15  # 用於判斷是否保留重疊區域的閾值。更�
 MIN_POINT_DISTANCE = 20  # 點之間的最小距離閾值
 
 # 新增参数配置
-N_NEGATIVE_POINTS = 30  # 负点采样数量
+N_NEGATIVE_POINTS = 10  # 负点采样数量
 MIN_NEGATIVE_DISTANCE = 5  # 负点与正点的最小距离
 
 def read_batch_speical(Img, ann_map, visualize_data=False):
@@ -285,28 +285,51 @@ def build_sam2_model(
     print("SAM2 segmentation Model Created!")
     return model
 
-def main_prediction_process(
-        sam2_model, image, predicted_mask
-    ):
 
-    i = 1 # ON9
+def calculate_iou(pred_mask, gt_mask):
+    """
+    Calculate IoU between prediction and ground truth masks
+    """
+    intersection = np.logical_and(pred_mask, gt_mask).sum()
+    union = np.logical_or(pred_mask, gt_mask).sum()
+    if union == 0:
+        return 0
+    return intersection / union
+
+def main_prediction_process(
+        sam2_model, image, predicted_mask, ground_truth_mask=None
+    ):
+    import time
+    
+    # Record start time
+    start_time = time.time()
+
+    i = 1 
+
+    # Calculate IoU for original prediction
+    original_iou = None
+    if ground_truth_mask is not None:
+        original_iou = calculate_iou(predicted_mask > 0, ground_truth_mask > 0)
+        print(f"Original Prediction IoU: {original_iou:.4f}")
 
     predictor2 = SAM2ImagePredictor(sam2_model)
 
-
+    print("Generating random points for the input......")
     # Generate random points for the input
-    _, _, input_points, input_labels, _ = read_batch_speical(image, predicted_mask, True) # predicted_mask ---> org_mask
+    _, _, input_points, input_labels, _ = read_batch_speical(image, predicted_mask, True)
+
+    print(f"Generated {input_points.shape[0]} points for the input")
     
     if (len(input_points) <= 1):
         return None, None, None, None
 
-    # Perform inference and predict masks
+    print(f"输入点坐标维度: {input_points.shape}")
+    print(f"输入标签维度: {input_labels.shape}")
+    print(f"输入标签维度: {np.ones([input_points.shape[0], 1]).shape}")
 
-    print(f"输入点坐标维度: {input_points.shape}")  # 应为(N,2)
-    print(f"输入标签维度: {input_labels.shape}")    # sam不能使用這個、为(N,)
-    print(f"输入标签维度: {np.ones([input_points.shape[0], 1]).shape}") # sam可以用這個   
+    print(f"Sam Model predicting......")  
 
-    # 用box(整個圖像)的形式輸入prompt
+    # SAM prediction
     with torch.no_grad():
         predictor2.set_image(image)
         masks, scores, logits = predictor2.predict(
@@ -314,85 +337,82 @@ def main_prediction_process(
             point_labels=input_labels
         )
 
-    # Process the predicted masks and sort by scores
+    print(f"Sam Model predict done!")
+
+    # Process predictions
     np_masks_2 = np.array(masks[:, 0])
     np_scores_2 = scores[:, 0]
     sorted_masks_2 = np_masks_2[np.argsort(np_scores_2)][::-1]
 
-    # Initialize segmentation map and occupancy mask
     occupancy_mask_2 = np.zeros_like(sorted_masks_2[0], dtype=bool)
 
-    # Combine masks to create the final segmentation map
     for i in range(sorted_masks_2.shape[0]):
         mask_2 = sorted_masks_2[i]
         if (mask_2 * occupancy_mask_2).sum() / mask_2.sum() > OVERLAP_THRESHOLD:
             continue
-
         mask_bool_2 = mask_2.astype(bool)
-        mask_bool_2[occupancy_mask_2] = False  # Set overlapping areas to False in the mask
-        occupancy_mask_2[mask_bool_2] = True  # Update occupancy_mask
+        mask_bool_2[occupancy_mask_2] = False
+        occupancy_mask_2[mask_bool_2] = True
 
-    # 移除小的白色區域
     seg_map2_cleaned = remove_small_objects(occupancy_mask_2, min_size=MIN_SIZE, connectivity=2)
-
-    # 創建圓形結構元素
     selem = disk(SELEM_RADIUS)
-
-    # 執行閉運算 (先膨脹後腐蝕)
     seg_map2_closed = binary_erosion(binary_dilation(seg_map2_cleaned, selem), selem)
-
-    # 將 seg_map2_closed 轉換回原始數據類型
     seg_map2_final = np.zeros_like(seg_map2_closed, dtype=np.uint8)
 
-    # 給mask上色
     for i in range(sorted_masks_2.shape[0]):
         mask_2 = sorted_masks_2[i]
         mask_bool_2 = mask_2.astype(bool)
-        mask_bool_2 = mask_bool_2 & seg_map2_closed  # 只保留在 seg_map2_closed 中的白色區域
+        mask_bool_2 = mask_bool_2 & seg_map2_closed
         seg_map2_final[mask_bool_2] = i + 1
 
+    # Calculate enhanced IoU and processing time
+    end_time = time.time()
+    processing_time = end_time - start_time
     
+    enhanced_iou = None
+    if ground_truth_mask is not None:
+        enhanced_iou = calculate_iou(seg_map2_closed, ground_truth_mask > 0)
+        iou_improvement = ((enhanced_iou - original_iou) / original_iou) * 100 if original_iou > 0 else 0
+        
+        print("\nPerformance Metrics:")
+        print(f"Original IoU: {original_iou:.4f}")
+        print(f"Enhanced IoU: {enhanced_iou:.4f}")
+        print(f"IoU Improvement: {iou_improvement:.2f}%")
+        print(f"Processing Time: {processing_time:.2f} seconds")
 
-    # 设置图像显示大小
+    # Visualization code remains the same...
     plt.figure(figsize=(15, 5))
 
-    # 显示原始图像
     plt.subplot(131)
     plt.imshow(image)
     plt.title('Original Image')
     plt.axis('off')
 
-    # 显示二值化mask
     plt.subplot(132)
     plt.imshow(predicted_mask, cmap='gray')
     plt.title('Binarized Mask')
     plt.axis('off')
 
-    # 显示带颜色标记的最终分割结果
     plt.subplot(133)
-    plt.imshow(seg_map2_final, cmap='tab20')  # 使用tab20颜色图来显示不同的标签
+    plt.imshow(seg_map2_final, cmap='tab20')
     plt.title('Binarized Mask with Points')
     plt.axis('off')
 
     plt.tight_layout()
     plt.show()
 
-
     plt.figure(figsize=(15, 5))
 
-    # 显示清理小物体后的结果
     plt.subplot(131)
     plt.imshow(seg_map2_cleaned, cmap='gray')
     plt.title('After Remove Small Objects')
     plt.axis('off')
 
-    # 显示膨胀操作后的结果
     plt.subplot(132)
     plt.imshow(binary_dilation(seg_map2_cleaned, selem), cmap='gray')
     plt.title('After Dilation')
     plt.axis('off')
 
-    # 显示最终的闭运算结果
     plt.subplot(133)
     plt.imshow(seg_map2_closed, cmap='gray')
     plt.title('After Closing Operation')
@@ -401,8 +421,9 @@ def main_prediction_process(
     plt.tight_layout()
     plt.show()
 
-    # save as final_segmentation.jpg
     cv2.imwrite('final_segmentation.jpg', seg_map2_final.astype(np.uint8) * 255)
+
+    return seg_map2_final, original_iou, enhanced_iou, processing_time
 
     
 
