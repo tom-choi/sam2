@@ -100,19 +100,21 @@ def read_batch(data, visualize_data=False):
 
 # 可修改的參數
 PATCH_SIZE = 100  # Patch大小,影響分割精度和速度。更大的patch可能提高精度,但會增加計算時間。
-MIN_SIZE = 25  # 移除小於此尺寸的白色區域。更大的值會移除更多的小區域。
+MIN_SIZE = 50  # 移除小於此尺寸的白色區域。更大的值會移除更多的小區域。
 SELEM_RADIUS = 4  # 形態學操作中圓形結構元素的半徑。更大的半徑會導致更多的平滑。
-OVERLAP_THRESHOLD = 0.15  # 用於判斷是否保留重疊區域的閾值。更高的值會保留更多的重疊區域。
+OVERLAP_THRESHOLD = 0.00  # 用於判斷是否保留重疊區域的閾值。更高的值會保留更多的重疊區域。
+
+SCORE_THRESHOLD = 0.05  # 預測分數閾值
 
 MIN_POINT_DISTANCE = 20  # 點之間的最小距離閾值
 
 # 新增参数配置
-N_NEGATIVE_POINTS = 10  # 负点采样数量
+N_NEGATIVE_POINTS = 25  # 负点采样数量
 MIN_NEGATIVE_DISTANCE = 5  # 负点与正点的最小距离
 
 def read_batch_speical(Img, ann_map, visualize_data=False):
     # 調整圖像和遮罩大小
-    r = min(1334 / Img.shape[1], 1334 / Img.shape[0])  # 縮放因子
+    r = min(1024 / Img.shape[1], 1024 / Img.shape[0])  # 縮放因子
     Img = cv2.resize(Img, (int(Img.shape[1] * r), int(Img.shape[0] * r)))
     ann_map = cv2.resize(ann_map, (int(ann_map.shape[1] * r), int(ann_map.shape[0] * r)), interpolation=cv2.INTER_NEAREST)
 
@@ -167,31 +169,37 @@ def read_batch_speical(Img, ann_map, visualize_data=False):
     positive_points = np.array(selected_positive_points)
 
     # 修改后的负点采样逻辑（替换原有负点生成部分）
-    # 生成负点（背景点）
-    background_coords = np.argwhere(eroded_mask == 0)
-    negative_points = []
-    valid_background_coords = []
+    # 創建距離圖，用於快速篩選合適的負點
+    distance_map = np.zeros_like(eroded_mask, dtype=np.float32)
+    for point in selected_positive_points:
+        y, x = point[1], point[0]
+        y_coords, x_coords = np.ogrid[:eroded_mask.shape[0], :eroded_mask.shape[1]]
+        distances = np.sqrt((x_coords - x)**2 + (y_coords - y)**2)
+        distance_map = np.maximum(distance_map, distances)
 
-    # 预筛选满足距离条件的背景点
-    for coord in background_coords:
-        y, x = coord
-        point = np.array([x, y])
-        if all(np.linalg.norm(point - p) >= MIN_NEGATIVE_DISTANCE for p in selected_positive_points):
-            valid_background_coords.append(point)
+    # 找出所有符合最小距離要求的背景點
+    valid_background_mask = (distance_map >= MIN_NEGATIVE_DISTANCE) & (eroded_mask == 0)
+    valid_coords = np.argwhere(valid_background_mask)
 
-    # 随机选择有效背景点
-    if len(valid_background_coords) >= N_NEGATIVE_POINTS:
-        selected_indices = np.random.choice(len(valid_background_coords), N_NEGATIVE_POINTS, replace=False)
-        negative_points = [valid_background_coords[i] for i in selected_indices]
+    # 如果有足夠的有效點，隨機選擇
+    if len(valid_coords) >= N_NEGATIVE_POINTS:
+        selected_indices = np.random.choice(len(valid_coords), N_NEGATIVE_POINTS, replace=False)
+        negative_points = valid_coords[selected_indices]
+        # 交換x,y坐標順序
+        negative_points = np.fliplr(negative_points)
     else:
-        # 如果有效点不足，使用所有有效点+随机补充（允许部分点距离较近）
-        negative_points = valid_background_coords.copy()
+        # 如果有效點不足，使用所有有效點
+        negative_points = np.fliplr(valid_coords)
+        # 需要額外的點時，放寬距離限制
         remaining = N_NEGATIVE_POINTS - len(negative_points)
         if remaining > 0:
-            rand_indices = np.random.choice(len(background_coords), remaining, replace=False)
-            negative_points += [np.array([background_coords[i][1], background_coords[i][0]]) for i in rand_indices]
-
-    negative_points = np.array(negative_points[:N_NEGATIVE_POINTS])  # 确保不超过指定数量
+            background_mask = (eroded_mask == 0)
+            remaining_coords = np.argwhere(background_mask)
+            remaining_indices = np.random.choice(len(remaining_coords), remaining, replace=False)
+            additional_points = np.fliplr(remaining_coords[remaining_indices])
+            negative_points = np.vstack([negative_points, additional_points])
+    
+    negative_points = np.array(negative_points)
     
     # 组合正负点并创建标签
     # 组合所有提示点并创建标签数组
@@ -329,19 +337,34 @@ def main_prediction_process(
 
     print(f"Sam Model predicting......")  
 
+    # (TODO)
+    # image = ground_truth_mask
+    # Ensure image is RGB (3 channels)
+    # if len(image.shape) == 2:  # If grayscale
+    #     image = np.stack([image] * 3, axis=-1)  # Convert to RGB
+    # elif len(image.shape) == 3 and image.shape[2] == 1:  # If grayscale with channel dimension
+    #     image = np.repeat(image, 3, axis=2)  # Convert to RGB
+    
+    plt.imshow(image)
+    
+    print(f"input_labels: {input_labels}")
+    print(f"input_points: {input_points}")
+
     # SAM prediction
     with torch.no_grad():
         predictor2.set_image(image)
         masks, scores, logits = predictor2.predict(
             point_coords=input_points,
-            point_labels=input_labels
+            point_labels=input_labels,
+            multimask_output=True
         )
 
     print(f"Sam Model predict done!")
 
-    # Process predictions
+    # 處理預測結果
     np_masks_2 = np.array(masks[:, 0])
     np_scores_2 = scores[:, 0]
+    print(np_scores_2)
     sorted_masks_2 = np_masks_2[np.argsort(np_scores_2)][::-1]
 
     occupancy_mask_2 = np.zeros_like(sorted_masks_2[0], dtype=bool)
