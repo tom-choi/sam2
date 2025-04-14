@@ -441,6 +441,7 @@ class ImagePreprocessor:
                     normalized[..., c] = channel
         
         return normalized.astype(np.uint8)
+    
     ###########
     
     ###########
@@ -587,7 +588,7 @@ class ImagePreprocessor:
     #     hsv[..., 2] = v_channel
     #     return cv2.cvtColor(hsv, cv2.COLOR_HSV2RGB)
     
- ##### 3.28矫正图片格式的histogram，对3.3的修订版
+ ##### 3.28矫正图片格式的histogram，对3.3的修订版(4.11使用，后续发现有问题就尝试再修订)
     @staticmethod
     def histogram_equalization(image, mask=None):
         """
@@ -674,6 +675,101 @@ class ImagePreprocessor:
         
         return result.astype(np.uint8)
     
+    # 4.13修订版
+    # @staticmethod
+    # def histogram_equalization(image, mask=None):
+    #     """
+    #     直方图均衡化，考虑有效区域，并保持输入输出格式一致
+    #     Args:
+    #         image: 原始图像 (H, W, C)，BGR或RGB格式，3通道
+    #         mask: 有效区域掩码 (H, W)，灰度格式，值为0表示背景，非0表示前景
+    #     Returns:
+    #         均衡化后的图像，与输入格式相同
+    #     """
+    #     # 检查输入类型
+    #     if image.dtype != np.uint8:
+    #         raise ValueError("输入图像应为uint8类型")
+        
+    #     # 保存原始图像形状信息
+    #     original_shape = image.shape
+    #     channels = 1 if len(original_shape) == 2 else original_shape[2]
+        
+    #     # 确保掩码是单通道
+    #     if mask is not None and len(mask.shape) == 3:
+    #         if mask.shape[2] == 4:  # RGBA掩码
+    #             # 使用Alpha通道作为掩码
+    #             mask = mask[..., 3].copy()
+    #             mask = (mask > 0).astype(np.uint8) * 255
+    #         elif mask.shape[2] == 1:
+    #             mask = mask[..., 0].copy()
+        
+    #     # 对RGB/BGR图像处理 - 转HSV处理亮度通道
+    #     if channels == 3:
+    #         # 转HSV以处理亮度通道
+    #         hsv = cv2.cvtColor(image, cv2.COLOR_BGR2HSV)  # 假设是BGR格式，如实际是RGB则需调整
+    #         v_channel = hsv[..., 2].copy()
+            
+    #         if mask is None:
+    #             # 整体均衡化
+    #             v_channel = cv2.equalizeHist(v_channel)
+    #         else:
+    #             # 确保mask是二值且与图像尺寸匹配
+    #             if mask.shape != image.shape[:2]:
+    #                 raise ValueError("mask尺寸与图像不匹配")
+                
+    #             # 创建有效区域mask - 前景区域(非零)视为有效区域
+    #             valid_mask = (mask > 0)
+                
+    #             valid_v = v_channel[valid_mask]
+    #             if len(valid_v) == 0:
+    #                 return image  # 无有效区域时直接返回
+                
+    #             # 直方图均衡化
+    #             hist = np.histogram(valid_v, bins=256, range=(0, 256))[0]
+    #             cdf = hist.cumsum()
+    #             # 避免除零错误
+    #             if cdf[-1] == 0:
+    #                 return image
+    #             cdf_normalized = (cdf - cdf.min()) * 255 / (cdf.max() - cdf.min() + 1e-6)
+                
+    #             # 使用查找表
+    #             lut = np.interp(np.arange(256), np.arange(256), cdf_normalized).astype(np.uint8)
+    #             v_channel[valid_mask] = lut[valid_v]
+            
+    #         # 更新亮度通道
+    #         hsv[..., 2] = v_channel
+            
+    #         # 转回原始颜色空间
+    #         result = cv2.cvtColor(hsv, cv2.COLOR_HSV2BGR)  # 与转换时使用相同的变换对
+        
+    #     # 对灰度图直接处理    
+    #     else:
+    #         if mask is None:
+    #             result = cv2.equalizeHist(image)
+    #         else:
+    #             if mask.shape != image.shape:
+    #                 raise ValueError("mask尺寸与图像不匹配")
+                
+    #             # 使用非零区域作为有效区域
+    #             valid_mask = (mask > 0)
+    #             v_channel = image.copy()
+    #             valid_v = v_channel[valid_mask]
+                
+    #             if len(valid_v) == 0:
+    #                 return image
+                
+    #             hist = np.histogram(valid_v, bins=256, range=(0, 256))[0]
+    #             cdf = hist.cumsum()
+    #             if cdf[-1] == 0:
+    #                 return image
+    #             cdf_normalized = (cdf - cdf.min()) * 255 / (cdf.max() - cdf.min() + 1e-6)
+                
+    #             lut = np.interp(np.arange(256), np.arange(256), cdf_normalized).astype(np.uint8)
+    #             v_channel[valid_mask] = lut[valid_v]
+                
+    #             result = v_channel
+        
+    #     return result.astype(np.uint8)
     
     # 3.26新版直方图
     def enhance_image(self, image, mask=None):
@@ -747,18 +843,75 @@ class ImagePreprocessor:
     旋转是以图像中心为旋转中心，旋转后维持图像的原始尺寸。
     旋转角度通过参数angle从外部获取。
     '''
+    # @staticmethod
+    # def rotate(img, mask, angle):
+    #     # 获取图像尺寸
+    #     h, w = img.shape[:2]
+    #     # 设置旋转中心为图像中心
+    #     center = (w/2, h/2)
+    #     # 计算旋转矩阵
+    #     M = cv2.getRotationMatrix2D(center, angle, 1.0)
+    #     # 对图像进行旋转
+    #     rotated_img = cv2.warpAffine(img, M, (w, h))
+    #     # 对掩码进行相同的旋转
+    #     rotated_mask = cv2.warpAffine(mask, M, (w, h))
+        
+    #     return rotated_img, rotated_mask
+
     @staticmethod
     def rotate(img, mask, angle):
-        # 获取图像尺寸
+        """
+        旋转图像和mask，并自动填充成矩形保持原比例
+        Args:
+            img: 输入图像 (H,W,C)
+            mask: 输入mask (H,W) 背景值为2
+            angle: 旋转角度(度)
+        Returns:
+            旋转后的图像和mask
+        """
+        # 获取原始尺寸
         h, w = img.shape[:2]
-        # 设置旋转中心为图像中心
         center = (w/2, h/2)
-        # 计算旋转矩阵
+        
+        # 执行旋转（不自动调整尺寸）
         M = cv2.getRotationMatrix2D(center, angle, 1.0)
-        # 对图像进行旋转
-        rotated_img = cv2.warpAffine(img, M, (w, h))
-        # 对掩码进行相同的旋转
-        rotated_mask = cv2.warpAffine(mask, M, (w, h))
+        rotated_img = cv2.warpAffine(img, M, (w, h), flags=cv2.INTER_LINEAR, borderMode=cv2.BORDER_CONSTANT, borderValue=0)
+        rotated_mask = cv2.warpAffine(mask, M, (w, h), flags=cv2.INTER_NEAREST, borderMode=cv2.BORDER_CONSTANT, borderValue=2)
+        
+        # 计算旋转后的有效区域（避免角上的黑色填充区）
+        # 创建临时全白图像用于计算有效区域
+        temp = np.ones((h, w), dtype=np.uint8) * 255
+        rotated_temp = cv2.warpAffine(temp, M, (w, h), flags=cv2.INTER_NEAREST)
+        
+        # 找到有效区域的边界
+        coords = cv2.findNonZero(rotated_temp)
+        if coords is not None:
+            x, y, w_rect, h_rect = cv2.boundingRect(coords)
+            
+            # 计算需要的填充量（保持原始宽高比）
+            pad_top = y
+            pad_bottom = h - (y + h_rect)
+            pad_left = x
+            pad_right = w - (x + w_rect)
+            
+            # ===== 新增：填充量限制检查 =====
+            max_pad_ratio = 0.7  # 最大允许填充原图70%的面积
+            if (pad_top + pad_bottom) > h*max_pad_ratio or \
+            (pad_left + pad_right) > w*max_pad_ratio:
+                # 回退到90度倍数的标准旋转
+                fallback_angle = random.choice([0, 90, 180, 270])
+                if angle == fallback_angle:  # 避免无限递归
+                    return rotated_img, rotated_mask
+                return ImagePreprocessor.rotate(img, mask, fallback_angle)
+            # ===== 结束新增 =====
+            
+            # 应用填充（使用check_and_pad_image逻辑）
+            rotated_img, rotated_mask, _ = ImagePreprocessor.check_and_pad_image(
+                rotated_img[y:y+h_rect, x:x+w_rect],
+                rotated_mask[y:y+h_rect, x:x+w_rect],
+                patch_size=1,  # 禁用patch_size整除检查
+                padding=(pad_top, pad_bottom, pad_left, pad_right)
+            )
         
         return rotated_img, rotated_mask
 
@@ -989,19 +1142,32 @@ class ImagePreprocessor:
         
         return processed_mask
     
-    # 图像缩放
-    ''' 主要用途是配合图像旋转，还有细胞比例的矫正，用于调用
-        这里缩放同时也会强化图像的分辨率，增强模型的鲁棒性。
-        图像比例需要自定，但一般由外部传入的ratio决定。
-    '''
-    @staticmethod
-    def resize(img, size):
-        img = cv2.resize(img, size)
-        return img
+    
+    ## 4.13尝试修改mask，RRBA掩码的设定
+    # @staticmethod
+    # def generate_mask(mask, background_value=2):
+    #     """处理RGBA掩码，根据前三个通道判断背景"""
+    #     if len(mask.shape) == 3 and mask.shape[2] == 4:
+    #         # 仅使用RGB通道判断背景
+    #         rgb_mask = mask[..., :3]
+    #         # 如果所有RGB通道都是background_value，则视为背景
+    #         is_background = np.all(rgb_mask == background_value, axis=2)
+    #         processed_mask = np.ones(mask.shape[:2], dtype=np.uint8) * 255
+    #         processed_mask[is_background] = 0
+    #         return processed_mask
+    #     # 处理单通道掩码
+    #     elif len(mask.shape) == 2 or (len(mask.shape) == 3 and mask.shape[2] == 1):
+    #         processed_mask = mask.copy()
+    #         if len(processed_mask.shape) == 3:
+    #             processed_mask = processed_mask[..., 0]
+    #         processed_mask[processed_mask == background_value] = 0
+    #         return processed_mask
+    #     else:
+    #         raise ValueError(f"Unsupported mask shape: {mask.shape}")
     
     
     @staticmethod
-    def show_image(self, image, title="Image"):
+    def show_image( image, title="Image"):
         """
         显示图像
         Args:
@@ -1021,15 +1187,76 @@ class ImagePreprocessor:
 
     #####  新的高级形态学去噪函数（基于连通域分析）  #######
 
+    # @staticmethod
+    # def advanced_denoise(input_image, binary_threshold=128, min_noise_size=50, max_hole_size=100,
+    #                     opening_radius=2, closing_radius=None, invert_input=False, invert_output=False):
+    #     """
+    #     高级形态学去噪函数（基于连通域分析）
+        
+    #     参数说明：
+    #     1. input_image: 输入图像变量（灰度或彩色图像）
+    #     2. binary_threshold: 二值化阈值（高于此值为白色，低于为黑色）
+    #     3. min_noise_size: 最小噪声面积（像素数），小于此值的孤立白点会被移除
+    #     4. max_hole_size: 最大孔洞面积（像素数），小于此值的黑色孔洞会被填充
+    #     5. opening_radius: 开操作结构元的圆盘半径（消除毛刺）
+    #     6. closing_radius: 闭操作结构元的圆盘半径（可选，连接断裂区域）
+    #     7. invert_input: 输入图像是否黑白反转（True表示黑底白字）
+    #     8. invert_output: 输出图像是否黑白反转
+        
+    #     返回：
+    #     处理后的二值图像
+    #     """
+    #     # 确保输入图像为灰度图
+    #     if len(input_image.shape) > 2:
+    #         img = cv2.cvtColor(input_image, cv2.COLOR_BGR2GRAY)
+    #     else:
+    #         img = input_image.copy()
+        
+    #     # 二值化
+    #     _, binary = cv2.threshold(img, binary_threshold, 255, cv2.THRESH_BINARY)
+        
+    #     # 可选：反转图像（例如黑底白字的情况）
+    #     if invert_input:
+    #         binary = 255 - binary
+        
+    #     # 转换为布尔矩阵（True=白色，False=黑色）
+    #     binary_bool = binary.astype(bool)
+        
+    #     # 第二步：填充小孔洞（黑色噪点）
+    #     cleaned = morphology.remove_small_holes(binary_bool, area_threshold=max_hole_size)
+        
+    #     # 第一步：移除小面积噪声（白色噪点）
+    #     filled = morphology.remove_small_objects(cleaned, min_size=min_noise_size)
+        
+    #     # 第三步：开操作（平滑边缘）
+    #     if opening_radius > 0:
+    #         smoothed = morphology.opening(filled, morphology.disk(opening_radius))
+    #     else:
+    #         smoothed = filled
+        
+    #     # 可选：闭操作（连接断裂区域）
+    #     if closing_radius and closing_radius > 0:
+    #         smoothed = morphology.closing(smoothed, morphology.disk(closing_radius))
+        
+    #     # 恢复为0-255图像
+    #     result = smoothed.astype(np.uint8) * 255
+        
+    #     # 可选：反转输出
+    #     if invert_output:
+    #         result = 255 - result
+        
+    #     # 返回结果图像
+    #     return result
+    
     @staticmethod
-    def advanced_denoise(input_image, binary_threshold=128, min_noise_size=50, max_hole_size=100,
+    def advanced_denoise(input_image, binary_threshold=0.5, min_noise_size=50, max_hole_size=100,
                         opening_radius=2, closing_radius=None, invert_input=False, invert_output=False):
         """
         高级形态学去噪函数（基于连通域分析）
         
         参数说明：
-        1. input_image: 输入图像变量（灰度或彩色图像）
-        2. binary_threshold: 二值化阈值（高于此值为白色，低于为黑色）
+        1. input_image: 输入图像变量（0-1浮点或0-255整数）
+        2. binary_threshold: 二值化阈值（对应输入图像范围）
         3. min_noise_size: 最小噪声面积（像素数），小于此值的孤立白点会被移除
         4. max_hole_size: 最大孔洞面积（像素数），小于此值的黑色孔洞会被填充
         5. opening_radius: 开操作结构元的圆盘半径（消除毛刺）
@@ -1038,16 +1265,33 @@ class ImagePreprocessor:
         8. invert_output: 输出图像是否黑白反转
         
         返回：
-        处理后的二值图像
+        处理后的二值图像（与输入图像相同的数据类型和范围）
         """
+        # 判断输入图像类型和范围
+        is_float = input_image.dtype == np.float32 or input_image.dtype == np.float64
+        
         # 确保输入图像为灰度图
         if len(input_image.shape) > 2:
             img = cv2.cvtColor(input_image, cv2.COLOR_BGR2GRAY)
         else:
             img = input_image.copy()
         
+        # 转换为整数范围进行处理
+        if is_float:
+            # 假设输入为0-1范围，转换为0-255
+            img = (img * 255).astype(np.uint8)
+            # 调整阈值
+            threshold_value = int(binary_threshold * 255)
+        else:
+            threshold_value = binary_threshold
+        
         # 二值化
-        _, binary = cv2.threshold(img, binary_threshold, 255, cv2.THRESH_BINARY)
+        _, binary = cv2.threshold(img, threshold_value, 255, cv2.THRESH_BINARY)
+        
+        # 调试信息
+        print(f"二值化前的图像范围: {np.min(img)}-{np.max(img)}")
+        print(f"二值化阈值: {threshold_value}")
+        print(f"二值化后白色像素数: {np.sum(binary > 0)}")
         
         # 可选：反转图像（例如黑底白字的情况）
         if invert_input:
@@ -1072,15 +1316,18 @@ class ImagePreprocessor:
         if closing_radius and closing_radius > 0:
             smoothed = morphology.closing(smoothed, morphology.disk(closing_radius))
         
-        # 恢复为0-255图像
-        result = smoothed.astype(np.uint8) * 255
-        
         # 可选：反转输出
         if invert_output:
-            result = 255 - result
+            smoothed = ~smoothed
         
-        # 返回结果图像
-        return result
+        # 返回结果图像（与输入格式相同）
+        if is_float:
+            result = smoothed.astype(np.float32)
+            return result
+        else:
+            result = smoothed.astype(np.uint8) * 255
+            return result
+    
     
     # 示例调用
     # img = cv2.imread('input.jpg')
@@ -1114,12 +1361,13 @@ class ImagePreprocessor:
         """
         # 默认参数范围
         default_ranges = {
-            'value': (-50, 20),               # 亮度调整
-            'alpha': (0.65, 1.2),              # 对比度调整
+            'value': (-40, 40),               # 亮度调整
+            'alpha': (0.8, 1.2),              # 对比度调整
             'low_percentile': (0, 10),         # 低百分位
             'high_percentile': (90, 100),     # 高百分位
-            'scale': (0.8, 1.2),               # 缩放比例范围
-             'rotation': [90, 180, 270],        # 旋转角度选项，只有三个90度方向
+            'scale': (0.7, 1.5),               # 缩放比例范围
+            'rotation': [0, 30, 45, 60, 90, 120, 135, 150, 180, 210, 225, 240, 270, 300, 315, 330],# 旋转角度选项
+            
             # 可以添加更多参数
         }
         
@@ -1139,7 +1387,7 @@ class ImagePreprocessor:
         # 生成随机参数
         random_params = {'seed': seed}
         for param, range_val in default_ranges.items():
-            if param == 'rotation':
+            if param == 'rotation' :
                 # 特殊处理旋转角度 - 从列表中随机选择
                 random_params[param] = random.choice(range_val)
             elif isinstance(range_val, tuple):
@@ -1213,7 +1461,7 @@ class ImagePreprocessor:
 
     
     #  3.26前旧版总流程(不含random)
-    def preprocess(self, image, mask, patch_size ,padding=None, value=0 , alpha=1):
+    def preprocess(self, image, mask, patch_size ,padding=None, value=0 , alpha=1,low_percentile=1,high_percentile=99):
         """
         完整的预处理流程
         Args:
@@ -1227,19 +1475,26 @@ class ImagePreprocessor:
         
         mask_background = self.generate_mask(mask)
         
-        # 1. 归一化处理 (屏蔽黑色背景)
-        image = self.normalize_image(image, mask_background)
+        # 1. 归一化处理
+        image = self.normalize_image(image, mask_background, 
+                                    low_percentile=low_percentile, 
+                                    high_percentile=high_percentile)
         
-        # 2. 直方图均衡化 (屏蔽黑色背景) 
+        # 2. 直方图均衡化
         image = self.histogram_equalization(image, mask_background)
+        
         # 3. 亮度调整
         image = self.adjust_brightness(image, value, mask_background)
+        
         # 4. 对比度调整
         image = self.adjust_contrast(image, alpha, mask_background)
+        
         # 处理透明边缘
         image, mask = self.handle_transparent_edges(image, mask)
+        
         # 图像填充
-        image, mask,_ = self.check_and_pad_image(image, mask, patch_size, padding)
+        image, mask, _ = self.check_and_pad_image(image, mask, patch_size, padding)
+        
 
      
         
@@ -1257,6 +1512,9 @@ class ImagePreprocessor:
                                     high_percentile=high_percentile)
         
         # 2. 直方图均衡化
+        # if enable_histo_equalization == 1:
+        #      image = self.histogram_equalization(image, mask_background)
+
         image = self.histogram_equalization(image, mask_background)
         
         # 3. 亮度调整
@@ -1336,7 +1594,7 @@ class ImagePreprocessor:
         return processed_image, processed_mask, params
     
     ## 自测函数
-    def preprocess_show(self, image_path, mask_path, patch_size , padding,value=0 , alpha=1.0):
+    def preprocess_show(self, image_path, mask_path, patch_size , padding=None,value=0 , alpha=1.0):
         """
         完整的预处理流程
         Args:
@@ -1390,7 +1648,8 @@ class ImagePreprocessor:
         # 处理透明边缘
         image, mask = self.handle_transparent_edges(image, mask)
         # 图像填充
-        image, mask = self.check_and_pad_image(image, mask, patch_size, padding)
+        image, mask, _ = self.check_and_pad_image(image, mask, patch_size, padding)
+        
 
         # 显示处理后的图像和mask
         self.show_image(image, title="Processed Image")
