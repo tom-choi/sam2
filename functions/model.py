@@ -1403,251 +1403,12 @@ def visualize_results(original_img, preprocessed_img, true_mask, pred_mask, metr
     plt.savefig(os.path.join(save_dir, f"{file_name}_histograms.png"), dpi=300, bbox_inches='tight')
     plt.close()
 
-# 4.10 新增 - 批量分割：处理整个文件夹的图像predict，包含了单张图片的效果，需要用到之前的函数pipeline
-# def batch_segmentation_pipeline(model_path, image_paths, mask_paths=None, save_dir="test/predictData", 
-#                               patch_size=256, stride=None, value=0, alpha=1.0, device=None):
-#     """
-#     批量分割流程：可以处理单张图像或批量图像
-    
-#     参数:
-#         model_path: 模型文件路径
-#         image_paths: 图像路径列表或单个图像路径或包含图像的目录路径
-#         mask_paths: 掩码路径列表或单个掩码路径或包含掩码的目录路径（可选）
-#         save_dir: 保存结果的目录
-#         patch_size: 处理的patch大小
-#         stride: patch滑动的步长
-#         value: 亮度调整值
-#         alpha: 对比度调整系数
-#         device: 使用的设备，None则自动选择
-    
-#     返回:
-#         单图像模式: 返回与segmentation_pipeline相同的输出
-#         批量模式: 返回包含统计信息和示例结果的字典
-#     """
-#     # 1. 处理输入路径 - 将单个路径转换为列表，处理目录情况
-#     def process_input_paths(input_path):
-#         if isinstance(input_path, (list, tuple)):
-#             return input_path
-#         elif os.path.isdir(input_path):
-#             # 获取目录中所有支持的图像文件
-#             supported_ext = ['.png', '.jpg', '.jpeg', '.tif', '.tiff', '.bmp']
-#             files = [f for f in os.listdir(input_path) 
-#                     if os.path.splitext(f)[1].lower() in supported_ext]
-#             return [os.path.join(input_path, f) for f in sorted(files)]
-#         else:
-#             return [input_path]
-    
-#     # 处理图像路径
-#     image_path_list = process_input_paths(image_paths)
-    
-#     # 处理掩码路径（如果有）
-#     mask_path_list = None
-#     if mask_paths is not None:
-#         mask_path_list = process_input_paths(mask_paths)
-#         if len(mask_path_list) != len(image_path_list):
-#             raise ValueError("图像和掩码数量不匹配")
-    
-#     # 如果是单图像模式，保持原有行为
-#     if len(image_path_list) == 1:
-#         return segmentation_pipeline(
-#             model_path=model_path,
-#             image_path=image_path_list[0],
-#             mask_path=mask_path_list[0] if mask_path_list else None,
-#             save_dir=save_dir,
-#             patch_size=patch_size,
-#             stride=stride,
-#             value=value,
-#             alpha=alpha,
-#             device=device
-#         )
-    
-#     # 2. 批量处理模式
-#     print(f"\n开始批量处理 {len(image_path_list)} 张图像...")
-    
-#     # 准备收集结果
-#     all_metrics = []
-#     best_iou = {'value': -1, 'index': -1, 'img_path': '', 'mask_path': '', 'metrics': None}
-#     worst_iou = {'value': float('inf'), 'index': -1, 'img_path': '', 'mask_path': '', 'metrics': None}
-#     best_dice = {'value': -1, 'index': -1, 'img_path': '', 'mask_path': '', 'metrics': None}
-#     worst_dice = {'value': float('inf'), 'index': -1, 'img_path': '', 'mask_path': '', 'metrics': None}
-#     closest_to_mean = {'diff': float('inf'), 'index': -1, 'img_path': '', 'mask_path': '', 'metrics': None}
-    
-#     # 为每张图像创建单独的子目录
-#     for i, img_path in enumerate(image_path_list):
-#         # 为每张图像创建单独的子目录
-#         img_name = os.path.splitext(os.path.basename(img_path))[0]
-#         img_save_dir = os.path.join(save_dir, img_name)
-#         os.makedirs(img_save_dir, exist_ok=True)
-        
-#         print(f"\n处理图像 {i+1}/{len(image_path_list)}: {img_name}")
-        
-#         # 获取对应的掩码路径（如果有）
-#         mask_path = mask_path_list[i] if mask_path_list else None
-        
-#         # 执行分割流程
-#         _, metrics = segmentation_pipeline(
-#             model_path=model_path,
-#             image_path=img_path,
-#             mask_path=mask_path,
-#             save_dir=img_save_dir,
-#             patch_size=patch_size,
-#             stride=stride,
-#             value=value,
-#             alpha=alpha,
-#             device=device
-#         )
-        
-#         # 收集指标
-#         if metrics:
-#             all_metrics.append(metrics)
-            
-#             # 更新最佳/最差结果
-#             if metrics['IoU'] > best_iou['value']:
-#                 best_iou.update({
-#                     'value': metrics['IoU'],
-#                     'index': i,
-#                     'img_path': img_path,
-#                     'mask_path': mask_path,
-#                     'metrics': metrics
-#                 })
-            
-#             if metrics['IoU'] < worst_iou['value']:
-#                 worst_iou.update({
-#                     'value': metrics['IoU'],
-#                     'index': i,
-#                     'img_path': img_path,
-#                     'mask_path': mask_path,
-#                     'metrics': metrics
-#                 })
-                
-#             if metrics['Dice'] > best_dice['value']:
-#                 best_dice.update({
-#                     'value': metrics['Dice'],
-#                     'index': i,
-#                     'img_path': img_path,
-#                     'mask_path': mask_path,
-#                     'metrics': metrics
-#                 })
-            
-#             if metrics['Dice'] < worst_dice['value']:
-#                 worst_dice.update({
-#                     'value': metrics['Dice'],
-#                     'index': i,
-#                     'img_path': img_path,
-#                     'mask_path': mask_path,
-#                     'metrics': metrics
-#                 })
-    
-#     # 3. 计算统计信息（如果有评估指标）
-#     if all_metrics:
-#         # 计算平均值
-#         avg_iou = np.mean([m['IoU'] for m in all_metrics])
-#         avg_dice = np.mean([m['Dice'] for m in all_metrics])
-        
-#         # 计算标准差
-#         std_iou = np.std([m['IoU'] for m in all_metrics])
-#         std_dice = np.std([m['Dice'] for m in all_metrics])
-        
-#         # 找到最接近平均值的样本
-#         for i, metrics in enumerate(all_metrics):
-#             current_diff = abs(metrics['IoU'] - avg_iou) + abs(metrics['Dice'] - avg_dice)
-#             if current_diff < closest_to_mean['diff']:
-#                 closest_to_mean.update({
-#                     'diff': current_diff,
-#                     'index': i,
-#                     'img_path': image_path_list[i],
-#                     'mask_path': mask_path_list[i] if mask_path_list else None,
-#                     'metrics': metrics
-#                 })
-        
-#         # 4. 保存统计信息和代表性结果
-#         stats_file = os.path.join(save_dir, "batch_stats.txt")
-#         with open(stats_file, 'w') as f:
-#             f.write(f"批量处理统计 ({len(all_metrics)} 张图像):\n")
-#             f.write(f"平均 IoU: {avg_iou:.4f} ± {std_iou:.4f}\n")
-#             f.write(f"平均 Dice: {avg_dice:.4f} ± {std_dice:.4f}\n")
-#             f.write("\n最佳 IoU:\n")
-#             f.write(f"  图像: {os.path.basename(best_iou['img_path'])}\n")
-#             f.write(f"  IoU: {best_iou['value']:.4f}, Dice: {best_iou['metrics']['Dice']:.4f}\n")
-#             f.write("\n最差 IoU:\n")
-#             f.write(f"  图像: {os.path.basename(worst_iou['img_path'])}\n")
-#             f.write(f"  IoU: {worst_iou['value']:.4f}, Dice: {worst_iou['metrics']['Dice']:.4f}\n")
-#             f.write("\n最接近平均值:\n")
-#             f.write(f"  图像: {os.path.basename(closest_to_mean['img_path'])}\n")
-#             f.write(f"  IoU: {closest_to_mean['metrics']['IoU']:.4f}, Dice: {closest_to_mean['metrics']['Dice']:.4f}\n")
-        
-#         print("\n批量处理完成，统计信息:")
-#         print(f"平均 IoU: {avg_iou:.4f} ± {std_iou:.4f}")
-#         print(f"平均 Dice: {avg_dice:.4f} ± {std_dice:.4f}")
-        
-#         def create_representative_result(title, img_info, save_name):
-#             """辅助函数创建代表性结果的可视化 - 显示原始图像、真实掩码和预测掩码"""
-#             img = cv2.imread(img_info['img_path'])
-#             mask = cv2.imread(img_info['mask_path'], cv2.IMREAD_GRAYSCALE) if img_info['mask_path'] else None
-            
-#             # 获取预测结果路径
-#             img_name = os.path.splitext(os.path.basename(img_info['img_path']))[0]
-#             img_save_dir = os.path.join(save_dir, img_name)
-#             pred_path = os.path.join(img_save_dir, f"{img_name}_prediction_final.png")
-#             pred_mask = cv2.imread(pred_path, cv2.IMREAD_GRAYSCALE) if os.path.exists(pred_path) else None
-            
-#             if pred_mask is not None:
-#                 # 创建可视化
-#                 plt.figure(figsize=(15, 5))
-                
-#                 # 原始图像
-#                 plt.subplot(131)
-#                 plt.imshow(cv2.cvtColor(img, cv2.COLOR_BGR2RGB))
-#                 plt.title(f'{title}\nOriginal Image')
-#                 plt.axis('off')
-                
-#                 # 真实掩码（如果有）
-#                 if mask is not None:
-#                     plt.subplot(132)
-#                     plt.imshow(mask, cmap='gray')
-#                     plt.title('Ground Truth Mask')
-#                     plt.axis('off')
-                
-#                 # 预测掩码
-#                 plt.subplot(133)
-#                 plt.imshow(pred_mask, cmap='gray')
-#                 title_text = 'Predicted Mask'
-#                 if img_info['metrics']:
-#                     title_text += f'\nIoU: {img_info["metrics"]["IoU"]:.4f}, Dice: {img_info["metrics"]["Dice"]:.4f}'
-#                 plt.title(title_text)
-#                 plt.axis('off')
-                
-#                 plt.tight_layout()
-#                 plt.savefig(os.path.join(save_dir, save_name), dpi=300, bbox_inches='tight')
-#                 plt.close()
-
-#         # 创建代表性结果的可视化
-#         if best_iou['index'] != -1:
-#             create_representative_result("Best IoU Result", best_iou, "best_iou_result.png")
-
-#         if worst_iou['index'] != -1:
-#             create_representative_result("Worst IoU Result", worst_iou, "worst_iou_result.png")
-
-#         if closest_to_mean['index'] != -1:
-#             create_representative_result("Closest to Average Result", closest_to_mean, "average_result.png")
-    
-#     # 返回统计信息
-#     if all_metrics:
-#         return {
-#             'average_metrics': {'IoU': avg_iou, 'Dice': avg_dice},
-#             'std_metrics': {'IoU': std_iou, 'Dice': std_dice},
-#             'best_iou': best_iou,
-#             'worst_iou': worst_iou,
-#             'best_dice': best_dice,
-#             'worst_dice': worst_dice,
-#             'closest_to_mean': closest_to_mean,
-#             'all_metrics': all_metrics
-#         }
-#     else:
-#         print("\n批量处理完成（无评估指标）")
-#         return None 
 
 # 4.14新修订，尝试确保读取争取mask，并按文件顺序排列读取，忽略名称问题
+
+
+####
+
 def batch_segmentation_pipeline(model_path, image_paths, mask_paths=None, save_dir="test/predictData", 
                               patch_size=256, stride=None, value=0, alpha=1.0, device=None):
     """
@@ -1711,7 +1472,12 @@ def batch_segmentation_pipeline(model_path, image_paths, mask_paths=None, save_d
     print(f"\n开始处理 {len(image_path_list)} 个样本...")
     os.makedirs(save_dir, exist_ok=True)
     
+    # 准备收集结果
     results = []
+    all_metrics = []
+    best_iou = {'value': -1, 'index': -1, 'img_path': '', 'mask_path': '', 'pred_path': '', 'metrics': None}
+    worst_iou = {'value': float('inf'), 'index': -1, 'img_path': '', 'mask_path': '', 'pred_path': '', 'metrics': None}
+    
     for idx in range(len(image_path_list)):
         img_path = image_path_list[idx]
         mask_path = mask_path_list[idx] if mask_path_list else None
@@ -1723,7 +1489,8 @@ def batch_segmentation_pipeline(model_path, image_paths, mask_paths=None, save_d
         
         print(f"\n\n 处理进度 {idx+1}/{len(image_path_list)}: {sample_name}")
         
-        result = segmentation_pipeline(
+        # 关键变化：处理segmentation_pipeline返回的元组结果
+        mask, metrics = segmentation_pipeline(
             model_path=model_path,
             image_path=img_path,
             mask_path=mask_path,
@@ -1734,13 +1501,199 @@ def batch_segmentation_pipeline(model_path, image_paths, mask_paths=None, save_d
             alpha=alpha,
             device=device
         )
-        results.append(result)
+        
+        # 将结果作为元组存储
+        results.append((mask, metrics))
+        
+        # 处理指标数据
+        if metrics is not None:
+            all_metrics.append(metrics)
+            
+            # 预测结果文件路径
+            pred_path = os.path.join(sample_dir, f"{sample_name}_prediction_final.png")
+            
+            # 更新最佳/最差IOU
+            iou = metrics.get('IoU')
+            if iou > best_iou['value']:
+                best_iou.update({
+                    'value': iou,
+                    'index': idx,
+                    'img_path': img_path,
+                    'mask_path': mask_path,
+                    'pred_path': pred_path,
+                    'metrics': metrics,
+                    'sample_name': sample_name
+                })
+            
+            if iou < worst_iou['value']:
+                worst_iou.update({
+                    'value': iou,
+                    'index': idx,
+                    'img_path': img_path,
+                    'mask_path': mask_path,
+                    'pred_path': pred_path,
+                    'metrics': metrics,
+                    'sample_name': sample_name
+                })
     
-    print("\n处理完成")
-    return results
-
-####
-
+    # 如果有收集到指标，计算统计信息
+    if all_metrics:
+        import numpy as np
+        from matplotlib import pyplot as plt
+        import cv2
+        
+        # 计算平均值和标准差
+        ious = [m['IoU'] for m in all_metrics]
+        avg_iou = np.mean(ious)
+        std_iou = np.std(ious)
+        
+        # 计算Dice指标的统计值
+        dices = [m['Dice'] for m in all_metrics]
+        avg_dice = np.mean(dices)
+        std_dice = np.std(dices)
+        
+        # 寻找最接近平均值的样本
+        closest_to_mean = {'diff': float('inf'), 'index': -1, 'sample_name': '', 'img_path': '', 
+                           'mask_path': '', 'pred_path': '', 'metrics': None}
+        
+        for idx, metrics in enumerate(all_metrics):
+            # 计算当前样本与平均值的差距
+            current_diff = abs(metrics['IoU'] - avg_iou) + abs(metrics['Dice'] - avg_dice)
+            if current_diff < closest_to_mean['diff']:
+                sample_name = os.path.splitext(os.path.basename(image_path_list[idx]))[0]
+                pred_path = os.path.join(save_dir, sample_name, f"{sample_name}_prediction_final.png")
+                
+                closest_to_mean.update({
+                    'diff': current_diff,
+                    'index': idx,
+                    'sample_name': sample_name,
+                    'img_path': image_path_list[idx],
+                    'mask_path': mask_path_list[idx] if mask_path_list else None,
+                    'pred_path': pred_path,
+                    'metrics': metrics
+                })
+        
+        # 创建统计目录
+        stats_dir = os.path.join(save_dir, "iou_statistics")
+        os.makedirs(stats_dir, exist_ok=True)
+        
+        # 保存统计信息到文本文件
+        stats_file = os.path.join(stats_dir, "batch_stats.txt")
+        with open(stats_file, 'w') as f:
+            f.write(f"批量处理统计 ({len(all_metrics)} 张图像):\n")
+            f.write(f"平均 IoU: {avg_iou:.4f} ± {std_iou:.4f}\n")
+            f.write(f"平均 Dice: {avg_dice:.4f} ± {std_dice:.4f}\n")
+            
+            f.write("\n最佳 IoU:\n")
+            f.write(f"  图像: {os.path.basename(best_iou['img_path'])}\n")
+            f.write(f"  IoU: {best_iou['value']:.4f}, Dice: {best_iou['metrics']['Dice']:.4f}\n")
+            
+            f.write("\n最差 IoU:\n")
+            f.write(f"  图像: {os.path.basename(worst_iou['img_path'])}\n")
+            f.write(f"  IoU: {worst_iou['value']:.4f}, Dice: {worst_iou['metrics']['Dice']:.4f}\n")
+            
+            f.write("\n最接近平均值:\n")
+            f.write(f"  图像: {os.path.basename(closest_to_mean['img_path'])}\n")
+            f.write(f"  IoU: {closest_to_mean['metrics']['IoU']:.4f}, Dice: {closest_to_mean['metrics']['Dice']:.4f}\n")
+            
+            # 添加所有样本的详细指标
+            f.write("\n所有样本的IoU值:\n")
+            sorted_indices = np.argsort(ious)[::-1]  # 降序排列
+            for i, idx in enumerate(sorted_indices):
+                sample_name = os.path.splitext(os.path.basename(image_path_list[idx]))[0]
+                f.write(f"{i+1}. {sample_name}: IoU={ious[idx]:.4f}, Dice={dices[idx]:.4f}\n")
+        
+        # 创建可视化函数
+        def create_visualization(sample_info, title_prefix):
+            """创建样本的可视化对比图"""
+            if not os.path.exists(sample_info['img_path']):
+                print(f"警告: 图像不存在 {sample_info['img_path']}")
+                return
+                
+            img = cv2.imread(sample_info['img_path'])
+            if img is None:
+                print(f"警告: 无法读取图像 {sample_info['img_path']}")
+                return
+                
+            img = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
+            
+            # 读取真实掩码（如果有）
+            mask = None
+            if sample_info['mask_path'] and os.path.exists(sample_info['mask_path']):
+                mask = cv2.imread(sample_info['mask_path'], cv2.IMREAD_GRAYSCALE)
+            
+            # 读取预测掩码
+            pred_mask = None
+            if os.path.exists(sample_info['pred_path']):
+                pred_mask = cv2.imread(sample_info['pred_path'], cv2.IMREAD_GRAYSCALE)
+            
+            if pred_mask is None:
+                print(f"警告: 无法读取预测掩码 {sample_info['pred_path']}")
+                return
+            
+            # 创建可视化
+            plt.figure(figsize=(15, 5))
+            
+            # 原始图像
+            plt.subplot(131)
+            plt.imshow(img)
+            plt.title(f"{title_prefix}: {sample_info['sample_name']}")
+            plt.axis('off')
+            
+            # 真实掩码
+            if mask is not None:
+                plt.subplot(132)
+                plt.imshow(mask, cmap='gray')
+                plt.title('真实掩码')
+                plt.axis('off')
+            
+            # 预测掩码
+            subplot_pos = 133 if mask is not None else 132
+            plt.subplot(subplot_pos)
+            plt.imshow(pred_mask, cmap='gray')
+            title_text = '预测掩码'
+            title_text += f'\nIoU: {sample_info["metrics"]["IoU"]:.4f}, Dice: {sample_info["metrics"]["Dice"]:.4f}'
+            plt.title(title_text)
+            plt.axis('off')
+            
+            plt.tight_layout()
+            plt.savefig(os.path.join(stats_dir, f"{title_prefix}_{sample_info['sample_name']}.png"), dpi=300, bbox_inches='tight')
+            plt.close()
+        
+        # 创建代表性结果的可视化
+        if best_iou['index'] != -1:
+            create_visualization(best_iou, "最佳IoU")
+        
+        if worst_iou['index'] != -1:
+            create_visualization(worst_iou, "最差IoU")
+        
+        if closest_to_mean['index'] != -1:
+            create_visualization(closest_to_mean, "平均IoU")
+        
+        # 打印统计信息
+        print("\n----- 批量处理统计信息 -----")
+        print(f"平均 IoU: {avg_iou:.4f} ± {std_iou:.4f}")
+        print(f"平均 Dice: {avg_dice:.4f} ± {std_dice:.4f}")
+        print(f"最佳 IoU: {best_iou['value']:.4f} (样本: {best_iou['sample_name']})")
+        print(f"最差 IoU: {worst_iou['value']:.4f} (样本: {worst_iou['sample_name']})")
+        print(f"统计信息已保存至: {stats_dir}")
+        
+        # 返回结果和统计信息
+        return {
+            'results': results,
+            'statistics': {
+                'average_metrics': {'IoU': avg_iou, 'Dice': avg_dice},
+                'std_metrics': {'IoU': std_iou, 'Dice': std_dice},
+                'best_iou': best_iou,
+                'worst_iou': worst_iou,
+                'closest_to_mean': closest_to_mean,
+                'all_metrics': all_metrics,
+                'stats_dir': stats_dir
+            }
+        }
+    
+    print("\n处理完成，但未收集到评估指标。可能是因为没有提供真实掩码。")
+    return {'results': results}
 
 # 优化后预测函数 2025.3.5 --18:21(old version)
 def optimized_predict(model, image_path, mask_path=None, device="cuda", save_dir="test/predictData", patch_size=256, stride=None, value=-30, alpha=1.3):
