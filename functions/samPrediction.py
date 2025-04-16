@@ -100,7 +100,7 @@ def read_batch(data, visualize_data=False):
 
 # 可修改的參數
 PATCH_SIZE = 100  # Patch大小,影響分割精度和速度。更大的patch可能提高精度,但會增加計算時間。
-MIN_SIZE = 50  # 移除小於此尺寸的白色區域。更大的值會移除更多的小區域。
+MIN_SIZE = 5  # 移除小於此尺寸的白色區域。更大的值會移除更多的小區域。
 SELEM_RADIUS = 4  # 形態學操作中圓形結構元素的半徑。更大的半徑會導致更多的平滑。
 OVERLAP_THRESHOLD = 0.00  # 用於判斷是否保留重疊區域的閾值。更高的值會保留更多的重疊區域。
 
@@ -112,44 +112,66 @@ MIN_POINT_DISTANCE = 20  # 點之間的最小距離閾值
 N_NEGATIVE_POINTS = 25  # 负点采样数量
 MIN_NEGATIVE_DISTANCE = 5  # 负点与正点的最小距离
 
-def read_batch_speical(Img, ann_map, visualize_data=False):
-    # 調整圖像和遮罩大小
-    r = min(1024 / Img.shape[1], 1024 / Img.shape[0])  # 縮放因子
-    Img = cv2.resize(Img, (int(Img.shape[1] * r), int(Img.shape[0] * r)))
-    ann_map = cv2.resize(ann_map, (int(ann_map.shape[1] * r), int(ann_map.shape[0] * r)), interpolation=cv2.INTER_NEAREST)
+def read_batch_speical(Img, ann_map, visualize_data=False, target_size=None):
+    """
+    Process image and annotation mask with flexible resizing options.
 
-    # 初始化二值遮罩
+    Args:
+        Img: Input image
+        ann_map: Annotation mask
+        visualize_ visualize the data
+        target_size: Optional target size (height, width) for resizing, or None to use original size
+    """
+    # If target_size is provided, use it for resizing
+    if target_size is not None:
+        target_height, target_width = target_size
+        # Calculate scale factors to maintain aspect ratio
+        r_height = target_height / Img.shape[0]
+        r_width = target_width / Img.shape[1]
+        # Use smaller scaling factor to ensure the image fits within target dimensions
+        r = min(r_height, r_width)
+    else:
+        # Keep original size (no scaling)
+        r = 1.0
+
+    # Apply resize only if scaling is needed (r != 1.0)
+    if r != 1.0:
+        Img = cv2.resize(Img, (int(Img.shape[1] * r), int(Img.shape[0] * r)))
+        ann_map = cv2.resize(ann_map, (int(ann_map.shape[1] * r), int(ann_map.shape[0] * r)),
+                           interpolation=cv2.INTER_NEAREST)
+
+    # Rest of the function remains the same...
+    # Initialize binary mask
     binary_mask = np.zeros_like(ann_map, dtype=np.uint8)
 
-    # 獲取二值遮罩並合併為單一遮罩
-    inds = np.unique(ann_map)[1:]  # 跳過背景（索引0）
+    # Get binary mask and merge into a single mask
+    inds = np.unique(ann_map)[1:]  # Skip background (index 0)
     for ind in inds:
         mask = (ann_map == ind).astype(np.uint8)
         binary_mask = np.maximum(binary_mask, mask)
 
-    # 先进行后处理
-    # 1. 移除小物体
+    # Post-processing
+    # 1. Remove small objects
     cleaned_mask = remove_small_objects(binary_mask.astype(bool), min_size=MIN_SIZE, connectivity=2)
-    
-    # 2. 创建圆形结构元素并进行闭运算
+
+    # 2. Create disk-shaped structuring element and perform closing operation
     selem = disk(SELEM_RADIUS)
     processed_mask = binary_erosion(binary_dilation(cleaned_mask, selem), selem)
-    
-    # 3. 腐蝕處理過的遮罩以避免邊界點
+
+    # 3. Erode the processed mask to avoid boundary points
     eroded_mask = cv2.erode(processed_mask.astype(np.uint8), np.ones((5, 5), np.uint8), iterations=1)
 
-    # 使用連通區域分析來找到所有獨立的白色區域
-    # 生成正点（前景点）
+    # Generate positive points (foreground points)
     labels = measure.label(eroded_mask)
     regions = measure.regionprops(labels)
-    
-    # 优化后的正点采样逻辑
+
+    # Optimized positive point sampling logic
     selected_positive_points = []
     for region in regions:
-        # 动态距离阈值（基于区域面积）
+        # Dynamic distance threshold (based on region area)
         dynamic_distance = max(15, int(0.08 * np.sqrt(region.area)))
-        
-        # 获取区域代表点
+
+        # Get region representative point
         y, x = region.centroid
         x, y = int(round(x)), int(round(y))
         if eroded_mask[y, x] == 0:
@@ -158,18 +180,17 @@ def read_batch_speical(Img, ann_map, visualize_data=False):
             nearest_idx = np.argmin(distances)
             y, x = coords[nearest_idx]
             x, y = int(x), int(y)
-        
+
         current_point = np.array([x, y])
-        
-        # 距离检查
+
+        # Distance check
         too_close = any(np.linalg.norm(current_point - p) < dynamic_distance for p in selected_positive_points)
         if not too_close:
             selected_positive_points.append(current_point)
-    
+
     positive_points = np.array(selected_positive_points)
 
-    # 修改后的负点采样逻辑（替换原有负点生成部分）
-    # 創建距離圖，用於快速篩選合適的負點
+    # Modified negative point sampling logic
     distance_map = np.zeros_like(eroded_mask, dtype=np.float32)
     for point in selected_positive_points:
         y, x = point[1], point[0]
@@ -177,20 +198,15 @@ def read_batch_speical(Img, ann_map, visualize_data=False):
         distances = np.sqrt((x_coords - x)**2 + (y_coords - y)**2)
         distance_map = np.maximum(distance_map, distances)
 
-    # 找出所有符合最小距離要求的背景點
     valid_background_mask = (distance_map >= MIN_NEGATIVE_DISTANCE) & (eroded_mask == 0)
     valid_coords = np.argwhere(valid_background_mask)
 
-    # 如果有足夠的有效點，隨機選擇
     if len(valid_coords) >= N_NEGATIVE_POINTS:
         selected_indices = np.random.choice(len(valid_coords), N_NEGATIVE_POINTS, replace=False)
         negative_points = valid_coords[selected_indices]
-        # 交換x,y坐標順序
         negative_points = np.fliplr(negative_points)
     else:
-        # 如果有效點不足，使用所有有效點
         negative_points = np.fliplr(valid_coords)
-        # 需要額外的點時，放寬距離限制
         remaining = N_NEGATIVE_POINTS - len(negative_points)
         if remaining > 0:
             background_mask = (eroded_mask == 0)
@@ -198,15 +214,18 @@ def read_batch_speical(Img, ann_map, visualize_data=False):
             remaining_indices = np.random.choice(len(remaining_coords), remaining, replace=False)
             additional_points = np.fliplr(remaining_coords[remaining_indices])
             negative_points = np.vstack([negative_points, additional_points])
-    
+
     negative_points = np.array(negative_points)
-    
-    # 组合正负点并创建标签
-    # 组合所有提示点并创建标签数组
-    all_points = np.vstack([positive_points, negative_points])
+
+    # Combine positive and negative points and create labels
+    all_points = np.vstack([positive_points, negative_points]) if len(positive_points) > 0 and len(negative_points) > 0 else (
+        positive_points if len(positive_points) > 0 else negative_points
+    )
     point_labels = np.array([1]*len(positive_points) + [0]*len(negative_points)).reshape(-1, 1)
 
+    # Visualization code (unchanged)
     if visualize_data:
+        # ... visualization code remains the same ...
         plt.figure(figsize=(15, 5))
 
         # Original Image
@@ -225,7 +244,7 @@ def read_batch_speical(Img, ann_map, visualize_data=False):
         plt.subplot(1, 3, 3)
         plt.title('Mask with Points')
         plt.imshow(processed_mask, cmap='gray')
-        
+
         colors = list(mcolors.TABLEAU_COLORS.values())
         for i, point in enumerate(all_points):
             plt.scatter(point[0], point[1], c=colors[i % len(colors)], s=100)
@@ -234,41 +253,51 @@ def read_batch_speical(Img, ann_map, visualize_data=False):
         plt.tight_layout()
         plt.show()
 
-        
         plt.figure(figsize=(10, 5))
         plt.imshow(eroded_mask, cmap='gray')
-        
-        # 绘制正点（绿色）和负点（红色）
+
+        # Plot positive points (green) and negative points (red)
         if len(positive_points) > 0:
-            plt.scatter(positive_points[:,0], positive_points[:,1], c='lime', s=50, 
+            plt.scatter(positive_points[:,0], positive_points[:,1], c='lime', s=50,
                        edgecolors='white', linewidths=1, label='Positive Points')
         if len(negative_points) > 0:
             plt.scatter(negative_points[:,0], negative_points[:,1], c='red', s=30,
                        marker='x', linewidths=1, label='Negative Points')
-        
+
         plt.legend()
         plt.title('Positive/Negative Points Visualization')
         plt.axis('off')
         plt.show()
 
-
-    # 使用处理过的mask作为返回值
+    # Use processed mask as return value
     binary_mask = processed_mask.astype(np.uint8)
     binary_mask = np.expand_dims(binary_mask, axis=-1)
     binary_mask = binary_mask.transpose((2, 0, 1))
 
-    # 调整维度以匹配SAM输入格式
-    all_points = np.expand_dims(all_points, axis=1)  # Shape: (N,1,2)
+    # Adjust dimensions to match SAM input format
+    all_points = np.expand_dims(all_points, axis=1) if len(all_points) > 0 else np.zeros((0, 1, 2))
 
     return Img, binary_mask, all_points, point_labels, len(inds)
 
-def read_image(image_path, mask_path):  # read and resize image and mask
-   img = cv2.imread(image_path)[..., ::-1]  # Convert BGR to RGB
-   mask = cv2.imread(mask_path, 0)
-   r = np.min([1024 / img.shape[1], 1024 / img.shape[0]])
-   img = cv2.resize(img, (int(img.shape[1] * r), int(img.shape[0] * r)))
-   mask = cv2.resize(mask, (int(mask.shape[1] * r), int(mask.shape[0] * r)), interpolation=cv2.INTER_NEAREST)
-   return img, mask
+def read_image(image_path, mask_path, target_size = None):  # read and resize image and mask
+    img = cv2.imread(image_path)[..., ::-1]  # Convert BGR to RGB
+    mask = cv2.imread(mask_path, 0)
+    if target_size is not None:
+        target_height, target_width = target_size
+        # Calculate scale factors to maintain aspect ratio
+        r_height = target_height / img.shape[0]
+        r_width = target_width / img.shape[1]
+        # Use smaller scaling factor to ensure the image fits within target dimensions
+        r = min(r_height, r_width)
+    else:
+        # Keep original size (no scaling)
+        r = 1.0
+
+    # Apply resize only if scaling is needed (r != 1.0)
+    if r != 1.0:
+        img = cv2.resize(img, (int(img.shape[1] * r), int(img.shape[0] * r)))
+        mask = cv2.resize(mask, (int(mask.shape[1] * r), int(mask.shape[0] * r)), interpolation=cv2.INTER_NEAREST)
+    return img, mask
 
 def get_points(mask, num_points):  # Sample points inside the input mask
    points = []
@@ -298,36 +327,68 @@ def calculate_iou(pred_mask, gt_mask):
     """
     Calculate IoU between prediction and ground truth masks
     """
+    # Ensure both masks have the same dimensions
+    if pred_mask.shape != gt_mask.shape:
+        # Resize one of the masks to match the other
+        # Option 1: Resize ground truth to match prediction
+        gt_mask_resized = cv2.resize(gt_mask.astype(np.uint8),
+                                    (pred_mask.shape[1], pred_mask.shape[0]),
+                                    interpolation=cv2.INTER_NEAREST)
+        gt_mask = gt_mask_resized > 0
+
     intersection = np.logical_and(pred_mask, gt_mask).sum()
     union = np.logical_or(pred_mask, gt_mask).sum()
     if union == 0:
         return 0
     return intersection / union
 
+def calculate_metrics(pred_mask, true_mask, threshold=0.5):
+    # Convert predictions to binary
+    pred_mask = (pred_mask > threshold).float()
+
+    # Calculate intersection and union
+    intersection = (pred_mask * true_mask).sum()
+    union = pred_mask.sum() + true_mask.sum() - intersection
+
+    # Calculate IoU
+    iou = (intersection + 1e-7) / (union + 1e-7)
+
+    # Calculate Dice coefficient
+    dice = (2. * intersection + 1e-7) / (pred_mask.sum() + true_mask.sum() + 1e-7)
+
+    return iou.item(), dice.item()
+
+
 def main_prediction_process(
-        sam2_model, image, predicted_mask, ground_truth_mask=None
+        sam2_model, image, predicted_mask, ground_truth_mask=None, save_dir = "test/predictData"
     ):
     import time
-    
+
     # Record start time
     start_time = time.time()
 
-    i = 1 
+    i = 1
+
+    # Ensure predicted_mask is properly binarized - fix for transparent areas
+    # Convert any non-zero values to 1 (this addresses the transparency issue)
+    binary_predicted_mask = np.where(predicted_mask > 0, 1, 0).astype(np.uint8)
 
     # Calculate IoU for original prediction
     original_iou = None
     if ground_truth_mask is not None:
-        original_iou = calculate_iou(predicted_mask > 0, ground_truth_mask > 0)
+        pred_masks = torch.sigmoid(torch.from_numpy(binary_predicted_mask)) > 0.5
+        original_iou, dice = calculate_metrics(pred_masks.float(), ground_truth_mask > 0)
         print(f"Original Prediction IoU: {original_iou:.4f}")
 
     predictor2 = SAM2ImagePredictor(sam2_model)
 
     print("Generating random points for the input......")
-    # Generate random points for the input
-    _, _, input_points, input_labels, _ = read_batch_speical(image, predicted_mask, True)
+
+    # Generate random points for the input using the binary mask
+    _, _, input_points, input_labels, _ = read_batch_speical(image, binary_predicted_mask, True)
 
     print(f"Generated {input_points.shape[0]} points for the input")
-    
+
     if (len(input_points) <= 1):
         return None, None, None, None
 
@@ -335,23 +396,16 @@ def main_prediction_process(
     print(f"输入标签维度: {input_labels.shape}")
     print(f"输入标签维度: {np.ones([input_points.shape[0], 1]).shape}")
 
-    print(f"Sam Model predicting......")  
+    print(f"Sam Model predicting......")
 
-    # (TODO)
-    # image = ground_truth_mask
-    # Ensure image is RGB (3 channels)
-    # if len(image.shape) == 2:  # If grayscale
-    #     image = np.stack([image] * 3, axis=-1)  # Convert to RGB
-    # elif len(image.shape) == 3 and image.shape[2] == 1:  # If grayscale with channel dimension
-    #     image = np.repeat(image, 3, axis=2)  # Convert to RGB
-    
     plt.imshow(image)
-    
+
     print(f"input_labels: {input_labels}")
     print(f"input_points: {input_points}")
 
     # SAM prediction
     with torch.no_grad():
+        image = np.ascontiguousarray(image)
         predictor2.set_image(image)
         masks, scores, logits = predictor2.predict(
             point_coords=input_points,
@@ -394,7 +448,8 @@ def main_prediction_process(
     
     enhanced_iou = None
     if ground_truth_mask is not None:
-        enhanced_iou = calculate_iou(seg_map2_closed, ground_truth_mask > 0)
+        pred_masks = torch.sigmoid(torch.from_numpy(seg_map2_closed)) > 0.5
+        enhanced_iou, dice = calculate_metrics(pred_masks.float(), ground_truth_mask > 0)
         iou_improvement = ((enhanced_iou - original_iou) / original_iou) * 100 if original_iou > 0 else 0
         
         print("\nPerformance Metrics:")
@@ -403,9 +458,8 @@ def main_prediction_process(
         print(f"IoU Improvement: {iou_improvement:.2f}%")
         print(f"Processing Time: {processing_time:.2f} seconds")
 
-    # Visualization code remains the same...
+        # Save the main comparison visualization
     plt.figure(figsize=(15, 5))
-
     plt.subplot(131)
     plt.imshow(image)
     plt.title('Original Image')
@@ -422,10 +476,11 @@ def main_prediction_process(
     plt.axis('off')
 
     plt.tight_layout()
+    plt.savefig(os.path.join(save_dir, 'sam_comparison.png'))
     plt.show()
 
+    # Save the processing steps visualization
     plt.figure(figsize=(15, 5))
-
     plt.subplot(131)
     plt.imshow(seg_map2_cleaned, cmap='gray')
     plt.title('After Remove Small Objects')
@@ -439,14 +494,39 @@ def main_prediction_process(
     plt.subplot(133)
     plt.imshow(seg_map2_closed, cmap='gray')
     plt.title('After Closing Operation')
-    plt.axis('off')     
+    plt.axis('off')
 
     plt.tight_layout()
+    plt.savefig(os.path.join(save_dir, 'sam_processing_steps.png'))
     plt.show()
 
-    cv2.imwrite('final_segmentation.jpg', seg_map2_final.astype(np.uint8) * 255)
+    # Save raw image, predicted mask, and final segmentation as separate files
+    plt.figure(figsize=(5, 5))
+    plt.imshow(image)
+    plt.axis('off')
+    plt.tight_layout()
+    plt.savefig(os.path.join(save_dir, 'sam_original_image.png'))
+    plt.close()
+
+    plt.figure(figsize=(5, 5))
+    plt.imshow(predicted_mask, cmap='gray')
+    plt.axis('off')
+    plt.tight_layout()
+    plt.savefig(os.path.join(save_dir, 'sam_predicted_mask.png'))
+    plt.close()
+
+    plt.figure(figsize=(5, 5))
+    plt.imshow(seg_map2_final, cmap='tab20')
+    plt.axis('off')
+    plt.tight_layout()
+    plt.savefig(os.path.join(save_dir, 'sam_segmentation_final.png'))
+    plt.close()
+
+    # Also save the final segmentation as raw array
+    cv2.imwrite(os.path.join(save_dir, 'sam_final_segmentation.jpg'), seg_map2_final.astype(np.uint8) * 255)
 
     return seg_map2_final, original_iou, enhanced_iou, processing_time
+
 
     
 
