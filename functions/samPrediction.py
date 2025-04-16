@@ -364,21 +364,22 @@ def main_prediction_process(
     ):
     import time
 
+    # Create save directory if it doesn't exist
+    os.makedirs(save_dir, exist_ok=True)
+
     # Record start time
     start_time = time.time()
 
-    i = 1
-
     # Ensure predicted_mask is properly binarized - fix for transparent areas
-    # Convert any non-zero values to 1 (this addresses the transparency issue)
     binary_predicted_mask = np.where(predicted_mask > 0, 1, 0).astype(np.uint8)
 
     # Calculate IoU for original prediction
     original_iou = None
+    dice = None
     if ground_truth_mask is not None:
         pred_masks = torch.sigmoid(torch.from_numpy(binary_predicted_mask)) > 0.5
         original_iou, dice = calculate_metrics(pred_masks.float(), ground_truth_mask > 0)
-        print(f"Original Prediction IoU: {original_iou:.4f}")
+        print(f"Original Prediction IoU: {original_iou:.4f}, Dice: {dice:.4f}")
 
     predictor2 = SAM2ImagePredictor(sam2_model)
 
@@ -394,14 +395,8 @@ def main_prediction_process(
 
     print(f"输入点坐标维度: {input_points.shape}")
     print(f"输入标签维度: {input_labels.shape}")
-    print(f"输入标签维度: {np.ones([input_points.shape[0], 1]).shape}")
 
     print(f"Sam Model predicting......")
-
-    plt.imshow(image)
-
-    print(f"input_labels: {input_labels}")
-    print(f"input_points: {input_points}")
 
     # SAM prediction
     with torch.no_grad():
@@ -415,7 +410,7 @@ def main_prediction_process(
 
     print(f"Sam Model predict done!")
 
-    # 處理預測結果
+    # Process prediction results
     np_masks_2 = np.array(masks[:, 0])
     np_scores_2 = scores[:, 0]
     print(np_scores_2)
@@ -445,20 +440,58 @@ def main_prediction_process(
     # Calculate enhanced IoU and processing time
     end_time = time.time()
     processing_time = end_time - start_time
-    
+
     enhanced_iou = None
+    enhanced_dice = None
     if ground_truth_mask is not None:
         pred_masks = torch.sigmoid(torch.from_numpy(seg_map2_closed)) > 0.5
-        enhanced_iou, dice = calculate_metrics(pred_masks.float(), ground_truth_mask > 0)
+        enhanced_iou, enhanced_dice = calculate_metrics(pred_masks.float(), ground_truth_mask > 0)
         iou_improvement = ((enhanced_iou - original_iou) / original_iou) * 100 if original_iou > 0 else 0
-        
+
         print("\nPerformance Metrics:")
-        print(f"Original IoU: {original_iou:.4f}")
-        print(f"Enhanced IoU: {enhanced_iou:.4f}")
+        print(f"Original IoU: {original_iou:.4f}, Dice: {dice:.4f}")
+        print(f"Enhanced IoU: {enhanced_iou:.4f}, Dice: {enhanced_dice:.4f}")
         print(f"IoU Improvement: {iou_improvement:.2f}%")
         print(f"Processing Time: {processing_time:.2f} seconds")
 
-        # Save the main comparison visualization
+        # Create comparison visualization (similar to visualize_results)
+        # Create color mask to show TP, FP, FN regions
+        color_mask = np.zeros((image.shape[0], image.shape[1], 3), dtype=np.uint8)
+
+        # Convert masks to binary
+        gt_binary = ground_truth_mask > 0
+        pred_binary = seg_map2_closed > 0
+
+        # Adjust sizes if needed
+        if gt_binary.shape != pred_binary.shape:
+            gt_binary = cv2.resize(
+                gt_binary.astype(np.uint8),
+                (pred_binary.shape[1], pred_binary.shape[0]),
+                interpolation=cv2.INTER_NEAREST
+            ) > 0
+
+        # True Positive (green): correctly detected regions
+        color_mask[np.logical_and(gt_binary, pred_binary)] = [0, 255, 0]
+
+        # False Positive (red): incorrectly detected regions
+        color_mask[np.logical_and(np.logical_not(gt_binary), pred_binary)] = [0, 0, 255]
+
+        # False Negative (blue): missed regions
+        color_mask[np.logical_and(gt_binary, np.logical_not(pred_binary))] = [255, 0, 0]
+
+        # Create overlay on original image
+        comparison_overlay = cv2.addWeighted(image, 1, color_mask, 0.5, 0)
+
+        # Save the comparison visualization
+        plt.figure(figsize=(8, 8))
+        plt.imshow(comparison_overlay)
+        plt.title(f'Ground Truth vs Prediction\nIoU: {enhanced_iou:.4f}, Dice: {enhanced_dice:.4f}')
+        plt.axis('off')
+        plt.tight_layout()
+        plt.savefig(os.path.join(save_dir, 'sam_gt_pred_comparison.png'), dpi=300)
+        plt.close()
+
+    # Save the main comparison visualization
     plt.figure(figsize=(15, 5))
     plt.subplot(131)
     plt.imshow(image)
@@ -467,17 +500,17 @@ def main_prediction_process(
 
     plt.subplot(132)
     plt.imshow(predicted_mask, cmap='gray')
-    plt.title('Binarized Mask')
+    plt.title('Initial Mask')
     plt.axis('off')
 
     plt.subplot(133)
-    plt.imshow(seg_map2_final, cmap='tab20')
-    plt.title('Binarized Mask with Points')
+    plt.imshow(seg_map2_closed, cmap='gray')
+    plt.title('Enhanced Mask')
     plt.axis('off')
 
     plt.tight_layout()
-    plt.savefig(os.path.join(save_dir, 'sam_comparison.png'))
-    plt.show()
+    plt.savefig(os.path.join(save_dir, 'sam_comparison.png'), dpi=300)
+    plt.close()
 
     # Save the processing steps visualization
     plt.figure(figsize=(15, 5))
@@ -497,36 +530,53 @@ def main_prediction_process(
     plt.axis('off')
 
     plt.tight_layout()
-    plt.savefig(os.path.join(save_dir, 'sam_processing_steps.png'))
-    plt.show()
-
-    # Save raw image, predicted mask, and final segmentation as separate files
-    plt.figure(figsize=(5, 5))
-    plt.imshow(image)
-    plt.axis('off')
-    plt.tight_layout()
-    plt.savefig(os.path.join(save_dir, 'sam_original_image.png'))
+    plt.savefig(os.path.join(save_dir, 'sam_processing_steps.png'), dpi=300)
     plt.close()
 
-    plt.figure(figsize=(5, 5))
-    plt.imshow(predicted_mask, cmap='gray')
-    plt.axis('off')
-    plt.tight_layout()
-    plt.savefig(os.path.join(save_dir, 'sam_predicted_mask.png'))
-    plt.close()
-
-    plt.figure(figsize=(5, 5))
+    # Save instance segmentation visualization
+    plt.figure(figsize=(8, 8))
     plt.imshow(seg_map2_final, cmap='tab20')
+    plt.title('Instance Segmentation')
     plt.axis('off')
     plt.tight_layout()
-    plt.savefig(os.path.join(save_dir, 'sam_segmentation_final.png'))
+    plt.savefig(os.path.join(save_dir, 'sam_segmentation_final.png'), dpi=300)
     plt.close()
 
     # Also save the final segmentation as raw array
-    cv2.imwrite(os.path.join(save_dir, 'sam_final_segmentation.jpg'), seg_map2_final.astype(np.uint8) * 255)
+    cv2.imwrite(os.path.join(save_dir, 'sam_final_segmentation.jpg'), seg_map2_closed.astype(np.uint8) * 255)
 
-    return seg_map2_final, original_iou, enhanced_iou, processing_time
+    # Create evaluation visualization if ground truth is available
+    if ground_truth_mask is not None:
+        plt.figure(figsize=(15, 5))
 
+        plt.subplot(131)
+        plt.imshow(ground_truth_mask, cmap='gray')
+        plt.title('Ground Truth')
+        plt.axis('off')
+
+        plt.subplot(132)
+        plt.imshow(seg_map2_closed, cmap='gray')
+        plt.title('Prediction')
+        plt.axis('off')
+
+        plt.subplot(133)
+        plt.imshow(comparison_overlay)
+        plt.title(f'ComparisonIoU: {enhanced_iou:.4f}, Dice: {enhanced_dice:.4f}')
+        plt.axis('off')
+
+        plt.tight_layout()
+        plt.savefig(os.path.join(save_dir, 'sam_evaluation.png'), dpi=300)
+        plt.close()
+
+    metrics = {
+        "Original_IoU": original_iou,
+        "Enhanced_IoU": enhanced_iou,
+        "Original_Dice": dice,
+        "Enhanced_Dice": enhanced_dice,
+        "Processing_Time": processing_time
+    }
+
+    return seg_map2_closed.astype(np.uint8), metrics, comparison_overlay if ground_truth_mask is not None else None, processing_time
 
     
 
