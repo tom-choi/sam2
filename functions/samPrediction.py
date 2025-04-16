@@ -474,10 +474,10 @@ def main_prediction_process(
         color_mask[np.logical_and(gt_binary, pred_binary)] = [0, 255, 0]
 
         # False Positive (red): incorrectly detected regions
-        color_mask[np.logical_and(np.logical_not(gt_binary), pred_binary)] = [0, 0, 255]
+        color_mask[np.logical_and(np.logical_not(gt_binary), pred_binary)] = [255, 0, 0]
 
         # False Negative (blue): missed regions
-        color_mask[np.logical_and(gt_binary, np.logical_not(pred_binary))] = [255, 0, 0]
+        color_mask[np.logical_and(gt_binary, np.logical_not(pred_binary))] = [0, 0, 255]
 
         # Create overlay on original image
         comparison_overlay = cv2.addWeighted(image, 1, color_mask, 0.5, 0)

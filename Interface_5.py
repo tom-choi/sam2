@@ -210,6 +210,11 @@ with gr.Blocks(title="Mitochondria Segmentation") as demo:
             # Output displays
             output_gallery = gr.Gallery(label="Results", columns=3, height=600)
             metrics_output = gr.Textbox(label="Metrics", lines=10)
+    # Add a new row for the comparison images
+    with gr.Row():
+        gr.Markdown("## Key Comparison Images")
+        unet_comparison = gr.Image(label="UNet Comparison", show_label=True)
+        sam_comparison = gr.Image(label="SAM Ground Truth vs Prediction", show_label=True)
 
     def get_actual_paths(image_choice, custom_image_path, mask_choice, custom_mask_path):
         """Get the actual file paths based on user selection"""
@@ -225,11 +230,12 @@ with gr.Blocks(title="Mitochondria Segmentation") as demo:
         return image_path, mask_path
 
     def process_and_display(unet_model_path, sam_model_path, sam_config_path, save_dir,
-                           image_choice, custom_image, mask_choice, custom_mask):
+                            image_choice, custom_image, mask_choice, custom_mask):
+        # Existing code
         image_path, mask_path = get_actual_paths(image_choice, custom_image, mask_choice, custom_mask)
 
         if not image_path:
-            return None, "Please select an input image."
+            return None, "Please select an input image.", None, None
 
         try:
             # Make sure the save directory exists
@@ -246,18 +252,29 @@ with gr.Blocks(title="Mitochondria Segmentation") as demo:
                 if existing_metrics and not metrics_text:
                     metrics_text = existing_metrics
 
-            return output_files, metrics_text
+            # Get paths for the specific comparison images
+            base_name = os.path.basename(image_path)
+            name_without_ext = os.path.splitext(base_name)[0]
+
+            unet_comparison_path = os.path.join(save_dir, f"{name_without_ext}_comparison.png")
+            sam_comparison_path = os.path.join(save_dir, "sam_gt_pred_comparison.png")
+
+            # Load images if they exist
+            unet_img = Image.open(unet_comparison_path) if os.path.exists(unet_comparison_path) else None
+            sam_img = Image.open(sam_comparison_path) if os.path.exists(sam_comparison_path) else None
+
+            return output_files, metrics_text, unet_img, sam_img
 
         except Exception as e:
             import traceback
             traceback.print_exc()
-            return None, f"Error: {str(e)}"
+            return None, f"Error: {str(e)}", None, None
 
     process_btn.click(
         process_and_display,
         inputs=[unet_model, sam_model, sam_config, save_dir,
                 image_input, custom_image, mask_input, custom_mask],
-        outputs=[output_gallery, metrics_output]
+        outputs=[output_gallery, metrics_output, unet_comparison, sam_comparison]
     )
 
 if __name__ == "__main__":
