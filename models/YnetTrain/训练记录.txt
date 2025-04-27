@@ -1,0 +1,73 @@
+Epoch 1/50:
+Training - Loss: 0.2417, IoU: 0.4049, Dice: 0.5429
+Validation - Loss: 0.0879, IoU: 0.5420, Dice: 0.6803
+------------------------------------------------------------
+Epoch 2/50:
+Training - Loss: 0.0638, IoU: 0.6883, Dice: 0.8137
+Validation - Loss: 0.1008, IoU: 0.5093, Dice: 0.6446
+------------------------------------------------------------
+Epoch 3/50:
+Training - Loss: 0.0433, IoU: 0.7469, Dice: 0.8539
+Validation - Loss: 0.0510, IoU: 0.5987, Dice: 0.7232
+------------------------------------------------------------
+Epoch 4/50:
+Training - Loss: 0.0345, IoU: 0.7919, Dice: 0.8829
+Validation - Loss: 0.0429, IoU: 0.6554, Dice: 0.7693
+------------------------------------------------------------
+Epoch 5/50:
+Training - Loss: 0.0309, IoU: 0.8112, Dice: 0.8950
+Validation - Loss: 0.0440, IoU: 0.6478, Dice: 0.7642
+------------------------------------------------------------
+Epoch 6/50:
+Training - Loss: 0.0284, IoU: 0.8255, Dice: 0.9038
+Validation - Loss: 0.0406, IoU: 0.6752, Dice: 0.7848
+------------------------------------------------------------
+Epoch 7/50:
+...
+Epoch 24/50:
+Training - Loss: 0.0215, IoU: 0.8759, Dice: 0.9335
+Validation - Loss: 0.0475, IoU: 0.6840, Dice: 0.7908
+------------------------------------------------------------
+Output is truncated. View as a scrollable element or open in a text editor. Adjust cell output settings...
+
+这个是4.27的Ynet，但是我在random部分修改了下att_ynet的model，这个是4.27的model  K 的训练情况
+
+
+
+
+
+
+下面是4.27 Ynet的 L训练情况
+
+
+Epoch 1/50:
+Training - Loss: 0.2722, IoU: 0.4515, Dice: 0.5881
+Validation - Loss: 0.1169, IoU: 0.6526, Dice: 0.7841
+------------------------------------------------------------
+Epoch 2/50:
+Training - Loss: 0.0904, IoU: 0.7153, Dice: 0.8329
+Validation - Loss: 0.3013, IoU: 0.2829, Dice: 0.4229
+------------------------------------------------------------
+Epoch 3/50:
+Training - Loss: 0.0559, IoU: 0.7905, Dice: 0.8824
+Validation - Loss: 0.0556, IoU: 0.7298, Dice: 0.8403
+------------------------------------------------------------
+Epoch 4/50:
+Training - Loss: 0.0426, IoU: 0.8276, Dice: 0.9053
+Validation - Loss: 0.0547, IoU: 0.7327, Dice: 0.8422
+------------------------------------------------------------
+Epoch 5/50:
+Training - Loss: 0.0345, IoU: 0.8535, Dice: 0.9205
+Validation - Loss: 0.6809, IoU: 0.3060, Dice: 0.4508
+------------------------------------------------------------
+Epoch 6/50:
+Training - Loss: 0.0280, IoU: 0.8788, Dice: 0.9353
+Validation - Loss: 0.0449, IoU: 0.7641, Dice: 0.8634
+------------------------------------------------------------
+Epoch 7/50:
+...
+Epoch 27/50:
+Training - Loss: 0.0104, IoU: 0.9550, Dice: 0.9769
+Validation - Loss: 0.0576, IoU: 0.7744, Dice: 0.8701
+------------------------------------------------------------
+Output is truncated. View as a scrollable element or open in a text editor. Adjust cell output settings...
