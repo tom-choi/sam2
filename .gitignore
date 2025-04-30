@@ -14,3 +14,5 @@ checkpoints/*.pt
 /temp_output
 /preprocessedSeed
 /test/old_predictdata
+/test/batch_predictData
+/test/batch_sampredictData
