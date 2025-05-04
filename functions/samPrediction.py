@@ -86,7 +86,7 @@ def read_batch(data, visualize_data=False):
         plt.axis('off')
 
         plt.tight_layout()
-        plt.show()
+        # plt.show()
 
     binary_mask = np.expand_dims(binary_mask, axis=-1)  # 現在形狀是 (1024, 1024, 1)
     binary_mask = binary_mask.transpose((2, 0, 1))
@@ -109,7 +109,7 @@ SCORE_THRESHOLD = 0.05  # 預測分數閾值
 MIN_POINT_DISTANCE = 20  # 點之間的最小距離閾值
 
 # 新增参数配置
-N_NEGATIVE_POINTS = 25  # 负点采样数量
+N_NEGATIVE_POINTS = 45  # 负点采样数量
 MIN_NEGATIVE_DISTANCE = 5  # 负点与正点的最小距离
 
 def read_batch_speical(Img, ann_map, visualize_data=False, target_size=None):
@@ -251,7 +251,7 @@ def read_batch_speical(Img, ann_map, visualize_data=False, target_size=None):
 
         plt.axis('off')
         plt.tight_layout()
-        plt.show()
+        # plt.show()
 
         plt.figure(figsize=(10, 5))
         plt.imshow(eroded_mask, cmap='gray')
@@ -267,7 +267,7 @@ def read_batch_speical(Img, ann_map, visualize_data=False, target_size=None):
         plt.legend()
         plt.title('Positive/Negative Points Visualization')
         plt.axis('off')
-        plt.show()
+        # plt.show()
 
     # Use processed mask as return value
     binary_mask = processed_mask.astype(np.uint8)
@@ -377,8 +377,17 @@ def main_prediction_process(
     original_iou = None
     dice = None
     if ground_truth_mask is not None:
-        pred_masks = torch.sigmoid(torch.from_numpy(binary_predicted_mask)) > 0.5
-        original_iou, dice = calculate_metrics(pred_masks.float(), ground_truth_mask > 0)
+        # pred_tensor = torch.sigmoid(torch.from_numpy(binary_predicted_mask)) > 0.5
+        # pred_masks = (torch.sigmoid(binary_predicted_mask) > 0.5).float()
+
+        true_mask_float = (ground_truth_mask == 255).astype(np.float32)
+        post_processed_float = (binary_predicted_mask > 0.5).astype(np.float32)
+
+        original_iou, dice = calculate_metrics(
+            torch.from_numpy(post_processed_float),
+            torch.from_numpy(true_mask_float)
+        )
+        # original_iou, dice = calculate_metrics(pred_tensor.float() > 0, true_tensor)
         print(f"Original Prediction IoU: {original_iou:.4f}, Dice: {dice:.4f}")
 
     predictor2 = SAM2ImagePredictor(sam2_model)
@@ -444,8 +453,16 @@ def main_prediction_process(
     enhanced_iou = None
     enhanced_dice = None
     if ground_truth_mask is not None:
-        pred_masks = torch.sigmoid(torch.from_numpy(seg_map2_closed)) > 0.5
-        enhanced_iou, enhanced_dice = calculate_metrics(pred_masks.float(), ground_truth_mask > 0)
+        true_mask_float = (ground_truth_mask == 255).astype(np.float32)
+        pred_masks_float = (seg_map2_closed > 0.5).astype(np.float32)
+
+        enhanced_iou, enhanced_dice = calculate_metrics(
+            torch.from_numpy(pred_masks_float),
+            torch.from_numpy(true_mask_float)
+        )
+
+        print(original_iou)
+
         iou_improvement = ((enhanced_iou - original_iou) / original_iou) * 100 if original_iou > 0 else 0
 
         print("\nPerformance Metrics:")
@@ -470,6 +487,11 @@ def main_prediction_process(
                 interpolation=cv2.INTER_NEAREST
             ) > 0
 
+        # Create valid area mask (non-transparent)
+        valid_area = np.ones_like(gt_binary, dtype=bool)
+        if len(image.shape) > 2 and image.shape[2] == 4:  # RGBA image
+            valid_area = (image[:,:,3] > 0)
+
         # True Positive (green): correctly detected regions
         color_mask[np.logical_and(gt_binary, pred_binary)] = [0, 255, 0]
 
@@ -477,7 +499,7 @@ def main_prediction_process(
         color_mask[np.logical_and(np.logical_not(gt_binary), pred_binary)] = [255, 0, 0]
 
         # False Negative (blue): missed regions
-        color_mask[np.logical_and(gt_binary, np.logical_not(pred_binary))] = [0, 0, 255]
+        color_mask[np.logical_and(np.logical_and(gt_binary, np.logical_not(pred_binary)), valid_area)] = [0, 0, 255]
 
         # Create overlay on original image
         comparison_overlay = cv2.addWeighted(image, 1, color_mask, 0.5, 0)
